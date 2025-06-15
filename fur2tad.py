@@ -22,9 +22,24 @@
 
 # https://github.com/tildearrow/furnace/blob/master/papers/format.md
 import zlib, io, struct
+from enum import IntEnum
 CHANNELS = 8
 
 # -------------------------------------------------------------------
+# Utilities
+
+class NoteValue(IntEnum):
+	FIRST = 0
+	LAST = 179
+	OFF = 180
+	RELEASE = 181
+	MACRO_RELEASE = 182
+
+notes = ["c", "c+", "d", "d+", "e", "f", "f+", "g", "g+", "a", "a+", "b"]
+def note_name_from_index(i):
+	note   = i % 12
+	octave = i // 12 - 5
+	return notes[note] + str(octave)
 
 def read_string(stream):
 	out = b''
@@ -39,12 +54,6 @@ def bytes_to_int(b, order="little", signed=False):
 
 def bytes_to_float(b):
 	return struct.unpack('f', b)[0]
-
-def read_effect(s, note, have_type, have_value):
-	t = bytes_to_int(s.read(1)) if have_type else None
-	v = bytes_to_int(s.read(1)) if have_value else None
-	if have_type or have_value:
-		note.effects.append((t, v))
 
 # -------------------------------------------------------------------
 
@@ -104,7 +113,7 @@ def FurnaceInfoBlock(furnace_file, name, data, s):
 	furnace_file.master_volume = bytes_to_float(s.read(4))
 
 	# Probably won't need to care about these?
-	furnace_file.broken_spee_selection                              = bytes_to_int(s.read(1))
+	furnace_file.broken_speed_selection                              = bytes_to_int(s.read(1))
 	furnace_file.no_slides_on_first_tick                            = bytes_to_int(s.read(1))
 	furnace_file.next_row_reset_arp_pos                             = bytes_to_int(s.read(1))
 	furnace_file.ignore_jump_at_end                                 = bytes_to_int(s.read(1))
@@ -151,17 +160,19 @@ def FurnaceSubsongBlock(furnace_file, name, data, s):
 	
 @block_handler("ADIR")
 def FurnaceAssetDirectoryBlock(furnace_file, name, data, s):
-	print("adir")
-	print(data)
+	pass
+	#print("adir")
+	#print(data)
 
 @block_handler("SMP2")
 def FurnaceSampleBlock(furnace_file, name, data, s):
-	print("smp2")
 	sample = FurnaceSample()
+	furnace_file.samples.append(sample)
+
 	sample.name = read_string(s)
 	sample.length             = bytes_to_int(s.read(4))
 	sample.compatibility_rate = bytes_to_int(s.read(4))
-	sample.c4_rate            = bytes_to_int(s.read(4))
+	sample.c4_rate            = bytes_to_int(s.read(4)) # In Hz
 	sample.depth              = bytes_to_int(s.read(1)) # 9 is BRR
 	sample.loop_direction     = bytes_to_int(s.read(1))
 	sample.flags              = bytes_to_int(s.read(1))
@@ -172,12 +183,12 @@ def FurnaceSampleBlock(furnace_file, name, data, s):
 
 @block_handler("INS2")
 def FurnaceInstrumentBlock(furnace_file, name, data, s):
-	print("ins2")
 	format_version = bytes_to_int(s.read(2))
 	instrument_type = bytes_to_int(s.read(2))
 	assert instrument_type == 29 # SNES
 
 	instrument = FurnaceInstrument()
+	furnace_file.instruments.append(instrument)
 
 	while True:
 		feature = s.read(2)
@@ -185,6 +196,7 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 			break
 		feature_size = bytes_to_int(s.read(2))
 		feature_data = s.read(feature_size)
+		print(feature, feature_data)
 		sf = io.BytesIO(feature_data)
 
 		if feature == b'NA':
@@ -209,7 +221,7 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 
 			b = bytes_to_int(sf.read(1)) # sustain/release
 			instrument.sustain  = b & 15
-			instrument.release  = (b >> 4) & 15
+			instrument.release  = (b >> 4) & 15 # Actually sustain rate?
 
 			b = bytes_to_int(sf.read(1)) # flags
 			instrument.gain_mode = b & 7
@@ -222,14 +234,24 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 			instrument.decay2 = b & 31
 			instrument.sustain_mode = (b >> 5) & 3
 
+			# TODO: Figure out what to do with these fields
+		else:
+			print("Unrecognized instrument feature", feature)
+
 @block_handler("PATN")
 def FurnacePatternBlock(furnace_file, name, data, s):
 	song          = furnace_file.songs[bytes_to_int(s.read(1))]
 	channel       = bytes_to_int(s.read(1))
 	pattern_index = bytes_to_int(s.read(2))
 	pattern_name  = read_string(s)
-	pattern       = FurnacePattern(furnace_file) # Create storage for pattern
+	pattern       = FurnacePattern() # Create storage for pattern
 	song.patterns[channel][pattern_index] = pattern
+
+	def read_effect(note, have_type, have_value):
+		t = bytes_to_int(s.read(1)) if have_type else None
+		v = bytes_to_int(s.read(1)) if have_value else None
+		if have_type or have_value:
+			note.effects.append((t, v))
 
 	pattern.rows  = [FurnaceNote() for _ in range(song.pattern_length)]
 	index = 0
@@ -246,28 +268,30 @@ def FurnacePatternBlock(furnace_file, name, data, s):
 				note.note = bytes_to_int(s.read(1))
 			if b & 2:
 				note.instrument = bytes_to_int(s.read(1))
+				song.instruments_used.add(note.instrument)
 			if b & 4:
 				note.volume = bytes_to_int(s.read(1))
-			read_effect(s, note, b & 8, b & 16)
+			read_effect(note, b & 8, b & 16)
 			if b & 32:
 				e = s.read(1)
-				read_effect(s, note, e & 1,  e & 2)
-				read_effect(s, note, e & 4,  e & 8)
-				read_effect(s, note, e & 16, e & 32)
-				read_effect(s, note, e & 64, e & 128)
+				read_effect(note, e & 1,  e & 2)
+				read_effect(note, e & 4,  e & 8)
+				read_effect(note, e & 16, e & 32)
+				read_effect(note, e & 64, e & 128)
 			if b & 64:
 				e = s.read(1)
-				read_effect(s, note, e & 1,  e & 2)
-				read_effect(s, note, e & 4,  e & 8)
-				read_effect(s, note, e & 16, e & 32)
-				read_effect(s, note, e & 64, e & 128)
+				read_effect(note, e & 1,  e & 2)
+				read_effect(note, e & 4,  e & 8)
+				read_effect(note, e & 16, e & 32)
+				read_effect(note, e & 64, e & 128)
 			index += 1
 
 # -------------------------------------------------------------------
 
 class FurnaceInstrument(object):
 	def __init__(self):
-		pass
+		# Set defaults
+		self.initial_sample = 0
 
 class FurnaceSample(object):
 	def __init__(self):
@@ -281,11 +305,58 @@ class FurnaceNote(object):
 		self.effects    = []
 	def __repr__(self):
 		return "%s %s %s %s" % (self.note, self.instrument, self.volume, self.effects)
+	def is_empty(self):
+		return self.note == None and self.instrument == None and self.volume == None and self.effects == []
 
 class FurnacePattern(object):
-	def __init__(self, furnace_file):
-		self.furnace_file = furnace_file
+	def __init__(self):
 		self.empty = True
+
+	def convert_to_tad(self, song):
+		out = []
+		row_index = 0
+
+		current_instrument = None
+		current_volume = None
+
+		while row_index < song.pattern_length:
+			note = self.rows[row_index]
+
+			# Find next note
+			next_index = row_index + 1
+			while next_index < song.pattern_length and self.rows[next_index].is_empty():
+				next_index += 1
+			next_note = self.rows[next_index] if next_index < song.pattern_length else None
+			duration = next_index - row_index
+			duration_in_ticks = duration # TODO
+
+			# Write any instrument changes
+			if note.instrument != current_instrument and note.instrument != None:
+				current_instrument = note.instrument
+				out.append("set_instrument %s" % song.furnace_file.instruments[current_instrument].name)
+
+			# Write any volume changes
+			if note.volume != current_volume and note.volume != None:
+				current_volume = note.volume
+				out.append("set_volume %d" % current_volume)
+
+			# Effects
+
+			# Write the note itself
+			if note.note == NoteValue.OFF:
+				out.append("rest %d" % duration_in_ticks)
+			elif note.note == None:
+				out.append("wait %d" % duration_in_ticks)
+			elif note.note >= NoteValue.FIRST and note.note <= NoteValue.LAST:
+				note_name = note_name_from_index(note.note)
+				if next_note and next_note.note == NoteValue.OFF:
+					out.append("play_note %s keyoff %s" % (note_name, duration_in_ticks))
+				else:
+					out.append("play_note %s no_keyoff %s" % (note_name, duration_in_ticks))
+
+			row_index = next_index
+
+		return out
 
 class FurnaceSong(object):
 	def __init__(self, furnace_file, stream):
@@ -304,6 +375,7 @@ class FurnaceSong(object):
 		self.highlight_B = bytes_to_int(stream.read(1))
 
 		# Initialize
+		self.instruments_used = set()
 		self.patterns = []
 		for i in range(CHANNELS):
 			self.patterns.append({})
@@ -325,10 +397,39 @@ class FurnaceSong(object):
 		for i in range(CHANNELS):
 			self.short_channel_names.append(read_string(stream))
 
+	def convert_to_tad(self):
+		out = ""
+
+		out += "#Title %s\n" % song.name
+		out += "#Composer %s\n" % song.author
+		out += "#Timer 160\n" # TODO
+
+		out += "\n"
+
+		# Define the instruments
+		out += "; Instrument definitions\n"
+		for instrument_index in self.instruments_used:
+			instrument = self.furnace_file.instruments[instrument_index]
+			out += "@%s %s\n" % (instrument.name, instrument.name)
+
+		out += "\n"
+
+		out += "; Patterns\n"
+		# Define the patterns
+		for channel in range(CHANNELS):
+			for k,v in self.patterns[channel].items():
+				if v.empty:
+					continue
+				out += "!pattern_%d_%d \\asm {\n%s\n}\n\n" % (channel, k, " | ".join(v.convert_to_tad(self)))
+		return out
+
 class FurnaceFile(object):
 	def __init__(self, filename):
-		# Initialize variables
+		# Storage for things defined in the file
 		self.songs = []
+		self.instruments = []
+		self.samples = []
+		self.instruments_used = set()
 
 		# Open the file
 		f = open(filename, "rb")
@@ -344,6 +445,7 @@ class FurnaceFile(object):
 		self.format_version = bytes_to_int(header[16:18])
 		song_info_pointer = bytes_to_int(header[20:24])
 
+		# Read and handle all of the blocks in the file
 		s.seek(song_info_pointer)
 		while True:
 			block_name = s.read(4).decode()
@@ -355,6 +457,10 @@ class FurnaceFile(object):
 			if block_name in block_handlers:
 				block_handlers[block_name](self, block_name, block_data, io.BytesIO(block_data))
 			else:
-				print("Don't have ", block_name)
+				print("Unrecognized block: ", block_name)
 
-f = FurnaceFile("test.fur")
+f = FurnaceFile("keyoff.fur")
+#f = FurnaceFile("test.fur")
+for song in f.songs:
+	print(song)
+	print(song.convert_to_tad())
