@@ -377,10 +377,11 @@ class FurnacePattern(object):
 			# Effects
 
 			# Write the note itself
-			if note.note == NoteValue.OFF or note.note == None:
-				while duration_in_ticks > 0:
-					out.append("wait %d" % min(256, duration_in_ticks))
+			if (note.note == None or note.note == NoteValue.OFF) and next_note and next_note.note and (next_note.note == NoteValue.OFF or (next_note.note >= NoteValue.FIRST and next_note.note <= NoteValue.LAST)):
+				while duration_in_ticks > 256:
+					out.append("wait 256")
 					duration_in_ticks -= 256
+				out.append("rest %d" % duration_in_ticks)
 			elif note.note >= NoteValue.FIRST and note.note <= NoteValue.LAST:
 				note_name = note_name_from_index(note.note)
 				ticks_for_play_note = min(256, duration_in_ticks) # play_note can only take a tick value up to 256 ticks
@@ -400,6 +401,10 @@ class FurnacePattern(object):
 					while leftover > 0:
 						out.append("wait %d" % min(256, leftover))
 						leftover -= 256
+			else:
+				while duration_in_ticks > 0:
+					out.append("wait %d" % min(256, duration_in_ticks))
+					duration_in_ticks -= 256
 			row_index = next_index
 
 		return out
