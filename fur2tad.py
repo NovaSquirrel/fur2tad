@@ -56,7 +56,10 @@ def bytes_to_float(b):
 	return struct.unpack('f', b)[0]
 
 possible_timer_milliseconds = [(_, _*0.125) for _ in range(64, 256+1)]
+cached_timer_and_multiplier = {}
 def find_timer_and_multiplier_for_tempo_and_speed(ticks_per_second, ticks_per_row):
+	if (ticks_per_second, ticks_per_row) in cached_timer_and_multiplier:
+		return cached_timer_and_multiplier[(ticks_per_second, ticks_per_row)]
 	milliseconds_per_tempo_tick = 1 / ticks_per_second * 1000
 
 	row_milliseconds = milliseconds_per_tempo_tick * ticks_per_row # Actual duration of each row
@@ -72,8 +75,9 @@ def find_timer_and_multiplier_for_tempo_and_speed(ticks_per_second, ticks_per_ro
 		if lowest_error == None or lowest_error > error:
 			lowest_error  = error
 			best_timer    = timer_value
-			best_multiply = integer_part
-	return (best_timer, int(best_multiply))
+			best_multiply = int(integer_part)
+	cached_timer_and_multiplier[(ticks_per_second, ticks_per_row)] = (best_timer, best_multiply)
+	return (best_timer, best_multiply)
 
 # -------------------------------------------------------------------
 
@@ -271,6 +275,8 @@ def FurnacePatternBlock(furnace_file, name, data, s):
 	def read_effect(note, have_type, have_value):
 		t = bytes_to_int(s.read(1)) if have_type else None
 		v = bytes_to_int(s.read(1)) if have_value else None
+		if t != None and v == None:
+			v = 0
 		if have_type or have_value:
 			note.effects.append((t, v))
 
@@ -307,15 +313,7 @@ def FurnacePatternBlock(furnace_file, name, data, s):
 				read_effect(note, e & 64, e & 128)
 			index += 1
 
-	# If this pattern is identical to a previous pattern, just store a reference to that pattern
-	if empty_pattern:
-		song.empty_patterns.add((channel, pattern_index))
-		return
-	for channel2 in range(CHANNELS):
-		for k,v in song.patterns[channel2].items():
-			if v == pattern:
-				song.pattern_aliases[channel][pattern_index] = (channel2, k)
-				return
+	song.empty = empty_pattern
 	song.patterns[channel][pattern_index] = pattern
 
 # -------------------------------------------------------------------
@@ -344,25 +342,31 @@ class FurnaceNote(object):
 
 class FurnacePattern(object):
 	def __init__(self):
-		pass
+		self.rows = []
 
-	def convert_to_tad(self, song, tad_ticks_per_row):
+	# Convert a pattern to MML without attempting to do any compression
+	def convert_to_tad(self, song, speed_at_each_row, loop_point):
 		out = []
 		row_index = 0
 
 		current_instrument = None
 		current_volume = None
 
-		while row_index < song.pattern_length:
+		while row_index < len(self.rows):
 			note = self.rows[row_index]
 
 			# Find next note
 			next_index = row_index + 1
-			while next_index < song.pattern_length and self.rows[next_index].is_empty():
+			while next_index < len(self.rows) and self.rows[next_index].is_empty():
 				next_index += 1
-			next_note = self.rows[next_index] if next_index < song.pattern_length else None
+			next_note = self.rows[next_index if next_index < song.pattern_length else loop_point] if loop_point != None else None
 			duration = next_index - row_index
+
+			tad_timer_value, tad_ticks_per_row = find_timer_and_multiplier_for_tempo_and_speed(speed_at_each_row[row_index][0], speed_at_each_row[row_index][1])
 			duration_in_ticks = duration * tad_ticks_per_row
+
+			if ("loop", None) in note.effects:
+				out.append("L")
 
 			# Write any instrument changes
 			if note.instrument != current_instrument and note.instrument != None:
@@ -379,7 +383,7 @@ class FurnacePattern(object):
 			# Write the note itself
 			if (note.note == None or note.note == NoteValue.OFF) and next_note and next_note.note and (next_note.note == NoteValue.OFF or (next_note.note >= NoteValue.FIRST and next_note.note <= NoteValue.LAST)):
 				out.append("r%%%d" % duration_in_ticks)
-			elif note.note >= NoteValue.FIRST and note.note <= NoteValue.LAST:
+			elif note.note != None and note.note >= NoteValue.FIRST and note.note <= NoteValue.LAST:
 				note_name = note_name_from_index(note.note)
 				ticks_for_play_note = min(256, duration_in_ticks) # play_note can only take a tick value up to 256 ticks
 				if not next_note or next_note.note != None:
@@ -389,7 +393,7 @@ class FurnacePattern(object):
 			else:
 				out.append("w%%%d" % duration_in_ticks)
 			row_index = next_index
-
+	
 		return out
 	def __eq__(self, other):
 		return self.rows == other.rows
@@ -413,11 +417,7 @@ class FurnaceSong(object):
 		# Initialize
 		self.instruments_used = set()
 		self.patterns = [{} for _ in range(CHANNELS)]        # self.patterns[channel][pattern_id]
-		self.pattern_aliases = [{} for _ in range(CHANNELS)] # self.pattern_aliases[channel][pattern_id] = (channel, pattern_id)
 		self.empty_patterns = set()                          # each entry is (channel, pattern_id)
-
-		# Calculate numbers used for note durations
-		self.tad_timer_value, self.tad_ticks_per_row = find_timer_and_multiplier_for_tempo_and_speed(self.ticks_per_second, self.speed1)
 
 	def read_orders(self, stream):
 		self.orders              = []
@@ -443,7 +443,8 @@ class FurnaceSong(object):
 			out += "#Title %s\n" % song.name
 		if song.author:
 			out += "#Composer %s\n" % song.author
-		out += "#Timer %d\n" % song.tad_timer_value
+		tad_timer_value, tad_ticks_per_row = find_timer_and_multiplier_for_tempo_and_speed(self.ticks_per_second, self.speed1)
+		out += "#Timer %d\n" % tad_timer_value
 
 		out += "\n"
 
@@ -455,30 +456,68 @@ class FurnaceSong(object):
 
 		out += "\n"
 
-		out += "; Patterns\n"
-		# Define the patterns
-		for channel in range(CHANNELS):
-			for k,v in self.patterns[channel].items():
-				out += "!pattern_%d_%d %s\n\n" % (channel, k, " ".join(v.convert_to_tad(self, self.tad_ticks_per_row)))
+		# Convert the orders and patterns into one long pattern per channel, plus information about loop points and speeds
+		combined_patterns = [FurnacePattern() for _ in range(CHANNELS)]
+		combined_pattern_offset_for_order_row = []
+		speed_at_each_row = []
+		loop_point = 0
 
-		out += "; Orders\n"
-		# Orders
+		order_index = 0  # Order row
+		row_index = 0    # Pattern row
+		new_order = True
+		current_ticks_per_second = song.ticks_per_second
+		current_ticks_per_row = song.speed1
+		stop_order_processing = False
+		while order_index < song.orders_length:
+			if new_order:
+				channel_patterns = [song.patterns[channel][song.orders[channel][order_index]] for channel in range(CHANNELS)]
+				combined_pattern_offset_for_order_row.append(len(combined_patterns[0].rows))
+				new_order = False
+
+			# Check on what each channel is doing on this row
+			next_row_index = row_index + 1
+			for channel in range(CHANNELS):
+				note = channel_patterns[channel].rows[row_index]
+				combined_patterns[channel].rows.append(note)
+				for effect_type, effect_value in note.effects:
+					if effect_type == 0x0D: # Jump to next pattern
+						order_index += 1
+						next_row_index = effect_value
+						new_order = True
+					elif effect_type == 0x0B: # Jump to order row
+						if effect_value > order_index: # Skip forward
+							order_index = effect_value
+							next_row_index = 0
+							new_order = True
+						else: # If jumping backwards, set loop point
+							loop_point = combined_pattern_offset_for_order_row[effect_value]
+							stop_order_processing = True
+					elif effect_type == 0xFF: # Don't loop
+						loop_point = None
+						stop_order_processing = True
+					elif effect_type == 0x09: # Set ticks-per-row (speed 1)
+						current_ticks_per_row = effect_value
+					elif effect_type == 0xF0: # Set BPM
+						current_ticks_per_second = effect_value / 2.5
+			speed_at_each_row.append((current_ticks_per_second, current_ticks_per_row))
+			if stop_order_processing:
+				break
+			# Onto the next row, and potentially the next order row
+			row_index = next_row_index
+			if row_index >= song.pattern_length:
+				row_index = 0
+				order_index += 1
+				new_order = True
+		# Insert loop point as a fake effect
+		if loop_point != None:
+			for channel in range(CHANNELS):
+				combined_patterns[channel].rows[loop_point].effects.append(("loop",None))
+
+		# Now we have one long pattern for each channel
+		channels_as_mml = [pattern.convert_to_tad(self, speed_at_each_row, loop_point) for pattern in combined_patterns]
+
 		for channel in range(CHANNELS):
-			channel_out = []
-			only_empty = True
-			for row in song.orders[channel]:
-				use_channel = channel
-				use_pattern = song.orders[channel][row]
-				if (use_channel, use_pattern) in song.empty_patterns:
-					channel_out.append("w%%%d" % (self.pattern_length * self.tad_ticks_per_row))
-					continue
-				only_empty = False
-				alias = song.pattern_aliases[channel].get(use_pattern)
-				if alias != None:
-					use_channel, use_pattern = alias
-				channel_out.append("!pattern_%d_%d" % (use_channel, use_pattern))
-			if not only_empty:
-				out += "ABCDEFGH"[channel] + " " + " ".join(channel_out) + "\n"
+			if any(not _.startswith("w%") and _ != "L" for _ in channels_as_mml[channel]): # Channel must not consist entirely of waits
 
 		return out
 
