@@ -22,6 +22,7 @@
 
 # https://github.com/tildearrow/furnace/blob/master/papers/format.md
 import zlib, io, struct, math
+from compress_mml import compress_mml
 from enum import IntEnum
 CHANNELS = 8
 
@@ -515,9 +516,12 @@ class FurnaceSong(object):
 
 		# Now we have one long pattern for each channel
 		channels_as_mml = [pattern.convert_to_tad(self, speed_at_each_row, loop_point) for pattern in combined_patterns]
-
+		channels_as_mml = list(map(compress_mml, channels_as_mml))
+		
+		# Output channels
 		for channel in range(CHANNELS):
 			if any(not _.startswith("w%") and _ != "L" for _ in channels_as_mml[channel]): # Channel must not consist entirely of waits
+				out += "ABCDEFGH"[channel] + " " + " ".join(channels_as_mml[channel]) + "\n"
 
 		return out
 
