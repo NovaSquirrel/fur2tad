@@ -39,7 +39,7 @@ notes = ["c", "c+", "d", "d+", "e", "f", "f+", "g", "g+", "a", "a+", "b"]
 def note_name_from_index(i):
 	note   = i % 12
 	octave = i // 12 - 5
-	return notes[note] + str(octave)
+	return "o" + str(octave) + notes[note]
 
 def read_string(stream):
 	out = b''
@@ -367,44 +367,27 @@ class FurnacePattern(object):
 			# Write any instrument changes
 			if note.instrument != current_instrument and note.instrument != None:
 				current_instrument = note.instrument
-				out.append("set_instrument %s" % song.furnace_file.instruments[current_instrument].name)
+				out.append("@%s" % song.furnace_file.instruments[current_instrument].name)
 
 			# Write any volume changes
 			if note.volume != current_volume and note.volume != None:
 				current_volume = note.volume
-				out.append("set_volume %d" % current_volume)
+				out.append("V%d" % current_volume)
 
 			# Effects
 
 			# Write the note itself
 			if (note.note == None or note.note == NoteValue.OFF) and next_note and next_note.note and (next_note.note == NoteValue.OFF or (next_note.note >= NoteValue.FIRST and next_note.note <= NoteValue.LAST)):
-				while duration_in_ticks > 256:
-					out.append("wait 256")
-					duration_in_ticks -= 256
-				out.append("rest %d" % duration_in_ticks)
+				out.append("r%%%d" % duration_in_ticks)
 			elif note.note >= NoteValue.FIRST and note.note <= NoteValue.LAST:
 				note_name = note_name_from_index(note.note)
 				ticks_for_play_note = min(256, duration_in_ticks) # play_note can only take a tick value up to 256 ticks
 				if not next_note or next_note.note != None:
-					if duration_in_ticks <= 256:
-						out.append("play_note %s keyoff %s" % (note_name, duration_in_ticks))
-					else:
-						out.append("play_note %s no_keyoff %s" % (note_name, ticks_for_play_note))
-						leftover = duration_in_ticks - ticks_for_play_note
-						while leftover > 256:
-							out.append("wait 256")
-							leftover -= 256
-						out.append("rest %d" % leftover)						
+					out.append("%s%%%d" % (note_name, duration_in_ticks))
 				else:
-					out.append("play_note %s no_keyoff %s" % (note_name, ticks_for_play_note))
-					leftover = duration_in_ticks - ticks_for_play_note
-					while leftover > 0:
-						out.append("wait %d" % min(256, leftover))
-						leftover -= 256
+					out.append("%s%%%d&" % (note_name, ticks_for_play_note))
 			else:
-				while duration_in_ticks > 0:
-					out.append("wait %d" % min(256, duration_in_ticks))
-					duration_in_ticks -= 256
+				out.append("w%%%d" % duration_in_ticks)
 			row_index = next_index
 
 		return out
@@ -464,7 +447,6 @@ class FurnaceSong(object):
 
 		out += "\n"
 
-		"""
 		# Define the instruments
 		out += "; Instrument definitions\n"
 		for instrument_index in self.instruments_used:
@@ -472,16 +454,14 @@ class FurnaceSong(object):
 			out += "@%s %s\n" % (instrument.name, instrument.name)
 
 		out += "\n"
-		"""
 
 		out += "; Patterns\n"
 		# Define the patterns
 		for channel in range(CHANNELS):
 			for k,v in self.patterns[channel].items():
-				out += "!pattern_%d_%d \\asm {\n%s\n}\n\n" % (channel, k, " | ".join(v.convert_to_tad(self, self.tad_ticks_per_row)))
+				out += "!pattern_%d_%d %s\n\n" % (channel, k, " ".join(v.convert_to_tad(self, self.tad_ticks_per_row)))
 
 		out += "; Orders\n"
-
 		# Orders
 		for channel in range(CHANNELS):
 			channel_out = []
