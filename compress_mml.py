@@ -20,10 +20,16 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-LOOP_PASSES = 3
-MAX_LOOP_INSTRUCTIONS = 30
+# Loop optimization
+LOOP_PASSES = 4
+MAX_LOOP_INSTRUCTIONS = 35
 
-def add_loops(input):
+# Subroutine optimization
+MAX_SUBROUTINE_LENGTH = 30
+MIN_SUBROUTINE_LENGTH = 4
+subroutine_count = 0
+
+def replace_with_loops(input):
 	out = []
 
 	start_loop_index = 0
@@ -72,7 +78,7 @@ def add_loops(input):
 			put_colon_at = 0
 			while True:
 				try_index = start_loop_index+put_colon_at
-				if try_index > len(input):
+				if try_index >= len(input):
 					break
 				if input[try_index] != this_loop_data[put_colon_at]:
 					break
@@ -88,7 +94,95 @@ def add_loops(input):
 			start_loop_index += 1
 	return out
 
-def compress_mml(mml):
+def replace_with_subroutines(channel, mml_sequences):
+	global subroutine_count
+	sequence = mml_sequences[channel]
+
+	# Find where every token type is
+	token_locations = {}
+	for index, token in enumerate(sequence):
+		if not token.startswith("o"): # Notes only
+			continue
+		if token not in token_locations:
+			token_locations[token] = []
+		token_locations[token].append(index)
+
+	# Go through every token
+	index = 0
+	while index < len(sequence) - MIN_SUBROUTINE_LENGTH:
+		this_token = sequence[index]
+		if not this_token.startswith("o"): # Notes only
+			index += 1
+			continue
+		max_size = min(MAX_SUBROUTINE_LENGTH, len(sequence)-index)
+
+		# Which places to check for a match at
+		check_locations = [_ for _ in token_locations[this_token] if _ >= (index+MIN_SUBROUTINE_LENGTH)]
+		if not check_locations:
+			index += 1
+			continue
+
+		# Build the sequence to compare against
+		try_sequence = []
+		loop_level = 0
+		for i in range(index, index+max_size):
+			t = sequence[i]
+			if t == "[":
+				loop_level += 1
+			elif t.startswith("]"):
+				loop_level -= 1
+			try_sequence.append(t)
+		# Trim any unfinished loops
+		while loop_level:
+			if try_sequence == []:
+				break
+			t = try_sequence.pop()
+			if t == "[":
+				loop_level -= 1
+		if loop_level:
+			index += 1
+			continue
+
+		while len(try_sequence) >= MIN_SUBROUTINE_LENGTH:
+			sequence_size = len(try_sequence)
+			match_at = []
+			for try_at in check_locations:
+				if sequence[try_at] != this_token:
+					continue
+				if sequence[try_at:try_at+sequence_size] == try_sequence:
+					match_at.append(try_at)
+
+			if match_at: # Replace
+				subroutine_name = "!sub%d" % subroutine_count
+				subroutine_count += 1
+				mml_sequences[subroutine_name] = try_sequence
+
+				for i in range(sequence_size):
+					replace_with = subroutine_name if i == 0 else "" # Replace removed tokens with placeholders to keep token_locations useful
+					sequence[index+i] = replace_with
+					for m in match_at:
+						sequence[m+i] = replace_with
+				break
+			t = try_sequence.pop()
+			if t.startswith("]"):
+				loop_level = 1
+				while loop_level:
+					t = try_sequence.pop()
+					if t == "[":
+						loop_level -= 1
+					elif t.startswith("]"):
+						loop_level.pop()
+						loop_level += 1
+		index += 1
+	mml_sequences[channel] = [_ for _ in sequence if _] # Remove placeholders
+
+def optimize_subroutines(mml_sequences):
+	# TODO
+	pass
+
+def compress_mml(channel, mml_sequences):
+	# Find loops
 	for _ in range(LOOP_PASSES):
-		mml = add_loops(mml)
-	return mml
+		mml_sequences[channel] = replace_with_loops(mml_sequences[channel])
+	replace_with_subroutines(channel, mml_sequences)
+	optimize_subroutines(mml_sequences)

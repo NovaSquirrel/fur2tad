@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 # https://github.com/tildearrow/furnace/blob/master/papers/format.md
-import zlib, io, struct, math
+import zlib, io, struct, math, sys
 from compress_mml import compress_mml
 from enum import IntEnum
 CHANNELS = 8
@@ -515,13 +515,12 @@ class FurnaceSong(object):
 				combined_patterns[channel].rows[loop_point].effects.append(("loop",None))
 
 		# Now we have one long pattern for each channel
-		channels_as_mml = [pattern.convert_to_tad(self, speed_at_each_row, loop_point) for pattern in combined_patterns]
-		channels_as_mml = list(map(compress_mml, channels_as_mml))
-		
-		# Output channels
-		for channel in range(CHANNELS):
-			if any(not _.startswith("w%") and _ != "L" for _ in channels_as_mml[channel]): # Channel must not consist entirely of waits
-				out += "ABCDEFGH"[channel] + " " + " ".join(channels_as_mml[channel]) + "\n"
+		mml_sequences = {"ABCDEFGH"[channel]:pattern.convert_to_tad(self, speed_at_each_row, loop_point) for channel,pattern in enumerate(combined_patterns)}
+		for k in "ABCDEFGH":
+			compress_mml(k, mml_sequences)
+		for k,v in mml_sequences.items():
+			if any(not _.startswith("w%") and _ != "L" for _ in v): # Sequence must not consist entirely of waits
+				out += k + " " + " ".join(v) + "\n"
 
 		return out
 
@@ -561,7 +560,8 @@ class FurnaceFile(object):
 			else:
 				print("Unrecognized block: ", block_name)
 
-f = FurnaceFile("keyoff.fur")
-#f = FurnaceFile("test.fur")
+if len(sys.argv) < 1:
+	sys.exit("Please provide a filename")
+f = FurnaceFile(sys.argv[1])
 for song in f.songs:
 	print(song.convert_to_tad())
