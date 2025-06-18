@@ -34,7 +34,7 @@ def replace_with_loops(input):
 
 	start_loop_index = 0
 	while start_loop_index < len(input):
-		if input[start_loop_index] == "[" or input[start_loop_index].startswith("]"):
+		if input[start_loop_index] == "[" or input[start_loop_index].startswith("]") or input[start_loop_index] == "L":
 			out.append(input[start_loop_index])
 			start_loop_index += 1
 			continue
@@ -45,7 +45,7 @@ def replace_with_loops(input):
 		best_covered_size = None # best_loop_size * (best_loop_repeats+1)
 		for loop_size in range(2, MAX_LOOP_INSTRUCTIONS+1):
 			this_loop_data = input[start_loop_index:start_loop_index+loop_size]
-			if this_loop_data[-1].startswith("]"):
+			if this_loop_data[-1] == "[" or this_loop_data[-1] == "L" or this_loop_data[-1].startswith("]"):
 				break
 			if len(this_loop_data) != loop_size:
 				continue
@@ -125,13 +125,20 @@ def replace_with_subroutines(channel, mml_sequences):
 		# Build the sequence to compare against
 		try_sequence = []
 		loop_level = 0
+		has_invalid_tokens = False
 		for i in range(index, index+max_size):
 			t = sequence[i]
 			if t == "[":
 				loop_level += 1
 			elif t.startswith("]"):
 				loop_level -= 1
+			elif t == "L":
+				has_invalid_tokens = True
+				break
 			try_sequence.append(t)
+		if has_invalid_tokens:
+			index += 1
+			break
 		# Trim any unfinished loops
 		while loop_level:
 			if try_sequence == []:
