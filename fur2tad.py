@@ -366,7 +366,7 @@ class FurnacePattern(object):
 			for index in range(len(out)-1, -1, -1): # Otherwise, find the most recent note
 				token = out[index]
 				if token_is_note(token):
-					if not token.endswith("&"):
+					if token.startswith("o") and not token.endswith("&"): # Ideally we'd be able to add a & to the last note in the arp
 						out[index] += "&"
 					return
 
@@ -430,9 +430,12 @@ class FurnacePattern(object):
 		arpeggio_note1 = None
 		arpeggio_note2 = None
 		arpeggio_speed = 1
+		most_recent_note = None
 
 		while row_index < len(self.rows):
 			note = self.rows[row_index]
+			if note.note != None:
+				most_recent_note = note.note
 
 			# Find next note
 			next_index = find_next_note_with(lambda _:not _.is_empty())
@@ -465,10 +468,16 @@ class FurnacePattern(object):
 				if effect_type == 0x00: # Arpeggio
 					if effect_value == 0:
 						arpeggio_enabled = False
+						if note.note == None and most_recent_note != None:
+							note.note = most_recent_note
+							apply_legato()
 					else:
 						arpeggio_enabled = True
 						arpeggio_note1 = effect_value >> 4
 						arpeggio_note2 = effect_value & 15
+						if note.note == None and most_recent_note != None:
+							note.note = most_recent_note
+							apply_legato()
 				elif effect_type in (0x0A, 0xFA, 0xF3, 0xF4): # Volume slide up/down
 					if effect_value != 0:
 						slide_amount = 0
@@ -496,6 +505,8 @@ class FurnacePattern(object):
 								tad_ticks = 256
 							if slide_rows != None:
 								out.append("Vs%s%d,%d" % ("+" if total_slide_amount>=0 else "", total_slide_amount, tad_ticks))
+				elif effect_type in (0x09, 0xF0): # Speed change
+					out.append("T%d" % tad_timer_value)
 				elif effect_type == 0x11: # Toggle noise
 					noise_mode = bool(effect_value) # TODO
 				elif effect_type == 0x12: # Echo
@@ -533,6 +544,9 @@ class FurnacePattern(object):
 								out.append("ps%s%d,%d" % ("+" if total_slide_amount>=0 else "", total_slide_amount, tad_ticks))
 				elif effect_type == 0xE0: # Arpeggio speed
 					arpeggio_speed = max(1, effect_value)
+					if note.note == None and most_recent_note != None:
+						note.note = most_recent_note
+						apply_legato()
 				elif effect_type == 0xEA: # Legato
 					legato = bool(effect_value)
 				elif effect_type == 0xF8: # Single tick volume up
