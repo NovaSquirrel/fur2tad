@@ -29,6 +29,9 @@ MAX_SUBROUTINE_LENGTH = 30
 MIN_SUBROUTINE_LENGTH = 4
 subroutine_count = 0
 
+def token_is_note(token):
+	return token.startswith("o")
+
 def replace_with_loops(input):
 	out = []
 
@@ -101,7 +104,7 @@ def replace_with_subroutines(channel, mml_sequences):
 	# Find where every token type is
 	token_locations = {}
 	for index, token in enumerate(sequence):
-		if not token.startswith("o"): # Notes only
+		if not token_is_note(token): # Notes only
 			continue
 		if token not in token_locations:
 			token_locations[token] = []
@@ -111,7 +114,7 @@ def replace_with_subroutines(channel, mml_sequences):
 	index = 0
 	while index < len(sequence) - MIN_SUBROUTINE_LENGTH:
 		this_token = sequence[index]
-		if not this_token.startswith("o"): # Notes only
+		if not token_is_note(this_token): # Notes only
 			index += 1
 			continue
 		max_size = min(MAX_SUBROUTINE_LENGTH, len(sequence)-index)

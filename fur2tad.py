@@ -50,6 +50,9 @@ def read_string(stream):
 			return out.decode()
 		out += c
 
+def token_is_note(token):
+	return token.startswith("o")
+
 def bytes_to_int(b, order="little", signed=False):
 	return int.from_bytes(b, byteorder=order, signed=signed)
 
@@ -348,10 +351,26 @@ class FurnacePattern(object):
 	# Convert a pattern to MML without attempting to do any compression
 	def convert_to_tad(self, song, speed_at_each_row, loop_point):
 		out = []
+
+		def apply_legato():
+			if out[-1].startswith("r"): # Rest
+				out[-1] = "w" + out[-1][1:] # If there's a rest before this, turn it into a wait
+				return
+			for index in range(len(out)-1, -1, -1): # Otherwise, find the most recent note
+				token = out[index]
+				if token_is_note(token):
+					if not token.endswith("&"):
+						out[index] += "&"
+					return
+
+		# Variables to track
 		row_index = 0
 
 		current_instrument = None
 		current_volume = None
+
+		# Furnace state
+		legato = False
 
 		while row_index < len(self.rows):
 			note = self.rows[row_index]
@@ -380,20 +399,39 @@ class FurnacePattern(object):
 				out.append("V%d" % current_volume)
 
 			# Effects
+			for effect_type, effect_value in note.effects:
+				if effect_type == 0x11: # Toggle noise
+					noise_mode = bool(effect_value) # TODO
+				elif effect_type == 0x12: # Echo
+					out.append("E1" if effect_value else "E0")
+				elif effect_type == 0x13: # Pitch modulation
+					out.append("PM" if effect_value else "PM0")
+				elif effect_type == 0x14: # Invert
+					if effect_value == 0:
+						out.append("i0")
+					else:
+						out.append("i" + ("L" if effect_value & 0xF0 else "") + ("R" if effect_value & 0x0F else ""))
+				elif effect_type == 0x1D: # Noise frequency
+					noise_frequency = effect_value & 31 # TODO
+				elif effect_type == 0xEA: # Legato
+					legato = bool(effect_value)
 
 			# Write the note itself
-			if (note.note == None or note.note == NoteValue.OFF) and next_note and next_note.note and (next_note.note == NoteValue.OFF or (next_note.note >= NoteValue.FIRST and next_note.note <= NoteValue.LAST)):
+			if (note.note == None or note.note == NoteValue.OFF) and next_note and next_note.note and (next_note.note == NoteValue.OFF or (next_note.note >= NoteValue.FIRST and next_note.note <= NoteValue.LAST)): # The next non-empty row is either a note cut or a note
 				out.append("r%%%d" % duration_in_ticks)
 			elif note.note != None and note.note >= NoteValue.FIRST and note.note <= NoteValue.LAST:
+				if legato: 
+					apply_legato()
 				note_name = note_name_from_index(note.note)
-				ticks_for_play_note = min(256, duration_in_ticks) # play_note can only take a tick value up to 256 ticks
 				if not next_note or next_note.note != None:
 					out.append("%s%%%d" % (note_name, duration_in_ticks))
 				else:
-					out.append("%s%%%d&" % (note_name, ticks_for_play_note))
+					out.append("%s%%%d&" % (note_name, duration_in_ticks))
 			else:
 				out.append("w%%%d" % duration_in_ticks)
 			row_index = next_index
+		if legato:
+			apply_legato()
 	
 		return out
 	def __eq__(self, other):
