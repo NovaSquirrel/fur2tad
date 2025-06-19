@@ -83,6 +83,9 @@ def find_timer_and_multiplier_for_tempo_and_speed(ticks_per_second, ticks_per_ro
 	cached_timer_and_multiplier[(ticks_per_second, ticks_per_row)] = (best_timer, best_multiply)
 	return (best_timer, best_multiply)
 
+def any_effects_are_volume_slide(note):
+	return any(lambda x:effect[0] in (0x0A, 0xFA, 0xF3, 0xF4, 0xFA) for effect in note.effects)
+
 # -------------------------------------------------------------------
 
 block_handlers = {}
@@ -352,6 +355,7 @@ class FurnacePattern(object):
 	def convert_to_tad(self, song, speed_at_each_row, loop_point):
 		out = []
 
+		# Utilities
 		def apply_legato():
 			if out[-1].startswith("r"): # Rest
 				out[-1] = "w" + out[-1][1:] # If there's a rest before this, turn it into a wait
@@ -362,6 +366,54 @@ class FurnacePattern(object):
 					if not token.endswith("&"):
 						out[index] += "&"
 					return
+
+		def find_next_note_with(condition, wrap_around=False):
+			search_index = row_index + 1
+			while True:
+				if search_index == row_index:
+					return None
+				if condition(self.rows[search_index]):
+					return search_index
+				search_index += 1
+				if search_index >= len(self.rows):
+					if wrap_around:
+						search_index = loop_point
+					else:
+						return None
+
+		def count_rows_until_note_with(condition):
+			row_count = 0
+			search_index = row_index + 1
+			while True:
+				if search_index == row_index:
+					return None
+				if condition(self.rows[search_index]):
+					return row_count
+				search_index += 1
+				row_count += 1
+				if search_index >= len(self.rows):
+					search_index = loop_point
+
+		def row_count_to_tad_ticks(row_count):
+			total_ticks = 0
+			check_index = row_index
+			for _ in range(row_count):
+				tad_timer_value, tad_ticks_per_row = find_timer_and_multiplier_for_tempo_and_speed(speed_at_each_row[check_index][0], speed_at_each_row[check_index][1])
+				total_ticks += tad_ticks_per_row
+				check_index += 1
+				if check_index >= len(self.rows):
+					check_index = loop_point
+			return total_ticks
+
+		def row_count_to_furnace_ticks(row_count):
+			total_ticks = 0
+			check_index = row_index
+			for _ in range(row_count):
+				total_ticks += speed_at_each_row[check_index][1]
+				check_index += 1
+				if check_index >= len(self.rows):
+					check_index = loop_point
+			return total_ticks
 
 		# Variables to track
 		row_index = 0
@@ -376,14 +428,17 @@ class FurnacePattern(object):
 			note = self.rows[row_index]
 
 			# Find next note
-			next_index = row_index + 1
-			while next_index < len(self.rows) and self.rows[next_index].is_empty():
-				next_index += 1
-			next_note = self.rows[next_index if next_index < song.pattern_length else loop_point] if loop_point != None else None
+			next_index = find_next_note_with(lambda _:not _.is_empty())
+			if loop_point:
+				next_note = self.rows[next_index if next_index != None else loop_point]
+			else:
+				next_note = self.rows[next_index] if next_index != None else None
+			if next_index == None:
+				next_index = len(self.rows)
 			duration = next_index - row_index
 
 			tad_timer_value, tad_ticks_per_row = find_timer_and_multiplier_for_tempo_and_speed(speed_at_each_row[row_index][0], speed_at_each_row[row_index][1])
-			duration_in_ticks = duration * tad_ticks_per_row
+			duration_in_ticks = row_count_to_tad_ticks(duration)
 
 			if ("loop", None) in note.effects:
 				out.append("L")
@@ -400,7 +455,34 @@ class FurnacePattern(object):
 
 			# Effects
 			for effect_type, effect_value in note.effects:
-				if effect_type == 0x11: # Toggle noise
+				if effect_type in (0x0A, 0xFA, 0xF3, 0xF4): # Volume slide up/down
+					if effect_value != 0:
+						slide_amount = 0
+						if effect_type in (0x0A, 0xFA):
+							if effect_value & 0x0F == 0:
+								slide_amount = effect_value >> 4
+							elif effect_value & 0xF0 == 0:
+								slide_amount = -effect_value
+						elif effect_type == 0xF3:
+							slide_amount = effect_value / 64
+						elif effect_type == 0xF4:
+							slide_amount = -(effect_value / 64)
+						if effect_type == 0xFA:
+							slide_amount *= 4
+
+						if slide_amount:
+							slide_rows = count_rows_until_note_with(any_effects_are_volume_slide)
+							furnace_ticks = row_count_to_furnace_ticks(slide_rows)
+							tad_ticks = row_count_to_tad_ticks(slide_rows)
+							total_slide_amount = round(furnace_ticks * (slide_amount / 2))
+							if abs(total_slide_amount) > 255:
+								total_slide_amount = 255 if total_slide_amount > 0 else -255
+							if tad_ticks > 256:
+								print("Volume slide at %d took too long" % row_index)
+								tad_ticks = 256
+							if slide_rows != None:
+								out.append("Vs%s%d,%d" % ("+" if total_slide_amount>=0 else "", total_slide_amount, tad_ticks))
+				elif effect_type == 0x11: # Toggle noise
 					noise_mode = bool(effect_value) # TODO
 				elif effect_type == 0x12: # Echo
 					out.append("E1" if effect_value else "E0")
@@ -413,8 +495,14 @@ class FurnacePattern(object):
 						out.append("i" + ("L" if effect_value & 0xF0 else "") + ("R" if effect_value & 0x0F else ""))
 				elif effect_type == 0x1D: # Noise frequency
 					noise_frequency = effect_value & 31 # TODO
+				elif effect_type == 0x80: # Set pan
+					out.append("p%d" % int(effect_value / 255 * 128))					
 				elif effect_type == 0xEA: # Legato
 					legato = bool(effect_value)
+				elif effect_type == 0xF8: # Single tick volume up
+					out.append("V+%d" % (effect_value*2))
+				elif effect_type == 0xF9: # Single tick volume down
+					out.append("V-%d" % (effect_value*2))
 
 			# Write the note itself
 			if (note.note == None or note.note == NoteValue.OFF) and next_note and next_note.note and (next_note.note == NoteValue.OFF or (next_note.note >= NoteValue.FIRST and next_note.note <= NoteValue.LAST)): # The next non-empty row is either a note cut or a note
