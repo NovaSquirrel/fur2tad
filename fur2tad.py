@@ -496,7 +496,27 @@ class FurnacePattern(object):
 				elif effect_type == 0x1D: # Noise frequency
 					noise_frequency = effect_value & 31 # TODO
 				elif effect_type == 0x80: # Set pan
-					out.append("p%d" % int(effect_value / 255 * 128))					
+					out.append("p%d" % int(effect_value / 255 * 128))
+				elif effect_type == 0x83: # Pan slide
+					if effect_value != 0:
+						slide_amount = 0
+						if effect_value & 0x0F == 0:
+							slide_amount = -(effect_value >> 4)
+						elif effect_value & 0xF0 == 0:
+							slide_amount = effect_value
+
+						if slide_amount:
+							slide_rows = count_rows_until_note_with(any_effects_are_volume_slide)
+							furnace_ticks = row_count_to_furnace_ticks(slide_rows)
+							tad_ticks = row_count_to_tad_ticks(slide_rows)
+							total_slide_amount = round(furnace_ticks * (slide_amount / 2))
+							if abs(total_slide_amount) > 128:
+								total_slide_amount = 128 if total_slide_amount > 0 else -128
+							if tad_ticks > 256:
+								print("Pan slide at %d took too long" % row_index)
+								tad_ticks = 256
+							if slide_rows != None:
+								out.append("ps%s%d,%d" % ("+" if total_slide_amount>=0 else "", total_slide_amount, tad_ticks))
 				elif effect_type == 0xEA: # Legato
 					legato = bool(effect_value)
 				elif effect_type == 0xF8: # Single tick volume up
