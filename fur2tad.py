@@ -51,7 +51,7 @@ def read_string(stream):
 		out += c
 
 def token_is_note(token):
-	return token.startswith("o")
+	return token.startswith("o") or token.startswith("{{o")
 
 def bytes_to_int(b, order="little", signed=False):
 	return int.from_bytes(b, byteorder=order, signed=signed)
@@ -298,6 +298,11 @@ def FurnacePatternBlock(furnace_file, name, data, s):
 		else:
 			empty_pattern = False
 			note = pattern.rows[index]
+			effect1, effect2 = None, None
+			if b & 32:
+				effect1 = bytes_to_int(s.read(1))
+			if b & 64:
+				effect2 = bytes_to_int(s.read(1))
 			if b & 1:
 				note.note = bytes_to_int(s.read(1))
 			if b & 2:
@@ -306,18 +311,16 @@ def FurnacePatternBlock(furnace_file, name, data, s):
 			if b & 4:
 				note.volume = bytes_to_int(s.read(1))
 			read_effect(note, b & 8, b & 16)
-			if b & 32:
-				e = s.read(1)
-				read_effect(note, e & 1,  e & 2)
-				read_effect(note, e & 4,  e & 8)
-				read_effect(note, e & 16, e & 32)
-				read_effect(note, e & 64, e & 128)
-			if b & 64:
-				e = s.read(1)
-				read_effect(note, e & 1,  e & 2)
-				read_effect(note, e & 4,  e & 8)
-				read_effect(note, e & 16, e & 32)
-				read_effect(note, e & 64, e & 128)
+			if effect1 != None:
+				#read_effect(note, effect1 & 1,  effect1 & 2)
+				read_effect(note, effect1 & 4,  effect1 & 8)
+				read_effect(note, effect1 & 16, effect1 & 32)
+				read_effect(note, effect1 & 64, effect1 & 128)
+			if effect2 != None:
+				read_effect(note, effect2 & 1,  effect2 & 2)
+				read_effect(note, effect2 & 4,  effect2 & 8)
+				read_effect(note, effect2 & 16, effect2 & 32)
+				read_effect(note, effect2 & 64, effect2 & 128)
 			index += 1
 
 	song.empty = empty_pattern
@@ -423,6 +426,10 @@ class FurnacePattern(object):
 
 		# Furnace state
 		legato = False
+		arpeggio_enabled = False
+		arpeggio_note1 = None
+		arpeggio_note2 = None
+		arpeggio_speed = 1
 
 		while row_index < len(self.rows):
 			note = self.rows[row_index]
@@ -455,7 +462,14 @@ class FurnacePattern(object):
 
 			# Effects
 			for effect_type, effect_value in note.effects:
-				if effect_type in (0x0A, 0xFA, 0xF3, 0xF4): # Volume slide up/down
+				if effect_type == 0x00: # Arpeggio
+					if effect_value == 0:
+						arpeggio_enabled = False
+					else:
+						arpeggio_enabled = True
+						arpeggio_note1 = effect_value >> 4
+						arpeggio_note2 = effect_value & 15
+				elif effect_type in (0x0A, 0xFA, 0xF3, 0xF4): # Volume slide up/down
 					if effect_value != 0:
 						slide_amount = 0
 						if effect_type in (0x0A, 0xFA):
@@ -517,6 +531,8 @@ class FurnacePattern(object):
 								tad_ticks = 256
 							if slide_rows != None:
 								out.append("ps%s%d,%d" % ("+" if total_slide_amount>=0 else "", total_slide_amount, tad_ticks))
+				elif effect_type == 0xE0: # Arpeggio speed
+					arpeggio_speed = max(1, effect_value)
 				elif effect_type == 0xEA: # Legato
 					legato = bool(effect_value)
 				elif effect_type == 0xF8: # Single tick volume up
@@ -530,11 +546,14 @@ class FurnacePattern(object):
 			elif note.note != None and note.note >= NoteValue.FIRST and note.note <= NoteValue.LAST:
 				if legato: 
 					apply_legato()
-				note_name = note_name_from_index(note.note)
-				if not next_note or next_note.note != None:
-					out.append("%s%%%d" % (note_name, duration_in_ticks))
+				if arpeggio_enabled:
+					out.append("{{%s %s %s}}%%%d,%%%d" % (note_name_from_index(note.note), note_name_from_index(note.note + arpeggio_note1), note_name_from_index(note.note + arpeggio_note2), duration_in_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / speed_at_each_row[row_index][1]))) ))
 				else:
-					out.append("%s%%%d&" % (note_name, duration_in_ticks))
+					note_name = note_name_from_index(note.note)
+					if not next_note or next_note.note != None:
+						out.append("%s%%%d" % (note_name, duration_in_ticks))
+					else:
+						out.append("%s%%%d&" % (note_name, duration_in_ticks))
 			else:
 				out.append("w%%%d" % duration_in_ticks)
 			row_index = next_index

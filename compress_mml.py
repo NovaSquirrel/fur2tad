@@ -30,7 +30,7 @@ MIN_SUBROUTINE_LENGTH = 4
 subroutine_count = 0
 
 def token_is_note(token):
-	return token.startswith("o")
+	return token.startswith("o") or token.startswith("{{o")
 
 def replace_with_loops(input):
 	out = []
