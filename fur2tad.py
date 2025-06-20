@@ -51,7 +51,7 @@ def read_string(stream):
 		out += c
 
 def token_is_note(token):
-	return token.startswith("o") or token.startswith("{{o")
+	return token.startswith("o") or token.startswith("{")
 
 def bytes_to_int(b, order="little", signed=False):
 	return int.from_bytes(b, byteorder=order, signed=signed)
@@ -85,6 +85,8 @@ def find_timer_and_multiplier_for_tempo_and_speed(ticks_per_second, ticks_per_ro
 
 def any_effects_are_volume_slide(note):
 	return any(lambda x:effect[0] in (0x0A, 0xFA, 0xF3, 0xF4, 0xFA) for effect in note.effects)
+def any_effects_are_pitch_sweep(note):
+	return any(lambda x:effect[0] in (0x01, 0x02) for effect in note.effects)
 
 # -------------------------------------------------------------------
 
@@ -366,7 +368,7 @@ class FurnacePattern(object):
 			for index in range(len(out)-1, -1, -1): # Otherwise, find the most recent note
 				token = out[index]
 				if token_is_note(token):
-					if token.startswith("o") and not token.endswith("&"): # Ideally we'd be able to add a & to the last note in the arp
+					if not token.endswith("&"):
 						out[index] += "&"
 					return
 
@@ -431,6 +433,7 @@ class FurnacePattern(object):
 		arpeggio_note2 = None
 		arpeggio_speed = 1
 		most_recent_note = None
+		pitch_slide_rate = None
 
 		while row_index < len(self.rows):
 			note = self.rows[row_index]
@@ -478,6 +481,16 @@ class FurnacePattern(object):
 						if note.note == None and most_recent_note != None:
 							note.note = most_recent_note
 							apply_legato()
+				elif effect_type in (0x01, 0x02): # Pitch slide up/down
+					if effect_value == 0:
+						pitch_slide_rate = None
+					else:
+						pitch_slide_rate = (effect_value / 32) if effect_type == 0x01 else (-effect_value / 32)
+						if note.note == None and most_recent_note != None:
+							note.note = most_recent_note
+							apply_legato()
+				elif effect_type == 0x03: # Portamento
+					pass
 				elif effect_type in (0x0A, 0xFA, 0xF3, 0xF4): # Volume slide up/down
 					if effect_value != 0:
 						slide_amount = 0
@@ -555,10 +568,23 @@ class FurnacePattern(object):
 					out.append("V-%d" % (effect_value*2))
 
 			# Write the note itself
-			if (note.note == None or note.note == NoteValue.OFF) and next_note and next_note.note and (next_note.note == NoteValue.OFF or (next_note.note >= NoteValue.FIRST and next_note.note <= NoteValue.LAST)): # The next non-empty row is either a note cut or a note
+			if pitch_slide_rate != None and most_recent_note != None and note.note != NoteValue.OFF and most_recent_note != NoteValue.OFF:
+				furnace_ticks = row_count_to_furnace_ticks(duration)
+				total_slide_amount = round(furnace_ticks * pitch_slide_rate)
+
+				if note.note == None or legato:
+					apply_legato()
+				starting_note = note.note if note.note != None else most_recent_note
+				ending_note = min(NoteValue.LAST, max(NoteValue.FIRST, starting_note + total_slide_amount))
+				note_start_name = note_name_from_index(starting_note)
+				note_stop_name = note_name_from_index(ending_note)
+				most_recent_note = ending_note
+
+				out.append("{%s %s}%%%d" % (note_start_name, note_stop_name, duration_in_ticks))
+			elif (note.note == None or note.note == NoteValue.OFF) and next_note and next_note.note and (next_note.note == NoteValue.OFF or (next_note.note >= NoteValue.FIRST and next_note.note <= NoteValue.LAST)): # The next non-empty row is either a note cut or a note
 				out.append("r%%%d" % duration_in_ticks)
 			elif note.note != None and note.note >= NoteValue.FIRST and note.note <= NoteValue.LAST:
-				if legato: 
+				if legato:
 					apply_legato()
 				if arpeggio_enabled:
 					out.append("{{%s %s %s}}%%%d,%%%d" % (note_name_from_index(note.note), note_name_from_index(note.note + arpeggio_note1), note_name_from_index(note.note + arpeggio_note2), duration_in_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / speed_at_each_row[row_index][1]))) ))

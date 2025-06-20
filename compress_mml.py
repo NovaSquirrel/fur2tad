@@ -30,7 +30,14 @@ MIN_SUBROUTINE_LENGTH = 4
 subroutine_count = 0
 
 def token_is_note(token):
-	return token.startswith("o") or token.startswith("{{o")
+	return token.startswith("o") or token.startswith("{")
+
+def find_recently_used_instrument(sequence, index):
+	while index > 0:
+		if sequence[index].startswith("@"):
+			return sequence[index]
+		index -= 1
+	return None
 
 def replace_with_loops(input):
 	out = []
@@ -165,10 +172,16 @@ def replace_with_subroutines(channel, mml_sequences):
 			if match_at: # Replace
 				subroutine_name = "!sub%d" % subroutine_count
 				subroutine_count += 1
-				mml_sequences[subroutine_name] = try_sequence
+
+				# Find the most recently used instrument
+				recently_used_instrument = find_recently_used_instrument(sequence, index)
+				mml_sequences[subroutine_name] = (["?" + recently_used_instrument] if recently_used_instrument != None else [])  + try_sequence
+				instrument_switch_in_subroutine = find_recently_used_instrument(try_sequence, len(try_sequence)-1)
 
 				for i in range(sequence_size):
 					replace_with = subroutine_name if i == 0 else "" # Replace removed tokens with placeholders to keep token_locations useful
+					if i == 1 and instrument_switch_in_subroutine != recently_used_instrument and instrument_switch_in_subroutine != None:
+						replace_with = instrument_switch_in_subroutine # Instrument switches in subroutines don't stick, so carry it into the main sequence
 					sequence[index+i] = replace_with
 					for m in match_at:
 						sequence[m+i] = replace_with
