@@ -83,6 +83,11 @@ def find_timer_and_multiplier_for_tempo_and_speed(ticks_per_second, ticks_per_ro
 	cached_timer_and_multiplier[(ticks_per_second, ticks_per_row)] = (best_timer, best_multiply)
 	return (best_timer, best_multiply)
 
+def furnace_ticks_to_tad_ticks(furnace_ticks, furnace_ticks_per_second, tad_timer):
+	milliseconds_per_tempo_tick = 1 / furnace_ticks_per_second * 1000
+	time = milliseconds_per_tempo_tick * furnace_ticks
+	return round(time / (tad_timer * 0.125))
+
 def any_effects_are_volume_slide(note):
 	return any(lambda x:effect[0] in (0x0A, 0xFA, 0xF3, 0xF4, 0xFA) for effect in note.effects)
 def any_effects_are_pitch_sweep(note):
@@ -434,6 +439,7 @@ class FurnacePattern(object):
 		arpeggio_speed = 1
 		most_recent_note = None
 		pitch_slide_rate = None
+		vibrato_range = 15
 
 		while row_index < len(self.rows):
 			note = self.rows[row_index]
@@ -490,7 +496,24 @@ class FurnacePattern(object):
 							note.note = most_recent_note
 							apply_legato()
 				elif effect_type == 0x03: # Portamento
+					# effect_value is an amount of pitch to add/subtract per Furnace tick, in 1/32 semitone units
 					pass
+				elif effect_type == 0x04: # Vibrato
+					# Furnace seems to have a 64-entry sequence for vibrato, and every Furnace tick, it adds the speed number to the index for this
+					if (effect_value & 0xF0 == 0) or (effect_value & 0x0F == 0):
+						out.append("MP0")
+					else:
+						for check_effect in note.effects: # Make sure vibrato range gets applied even if it's in a later effect column
+							if check_effect[0] == 0xE4: # Vibrato range
+								vibrato_range = check_effect[1]
+								break
+						# MP<depth_in_cents>, <quarter_wavelength_in_ticks> [, delay_in_ticks]
+						vibrato_speed = effect_value >> 4
+						vibrato_depth = effect_value & 15
+						# 6.25 is 1/16*100
+						depth_in_cents = round(vibrato_depth/15 * vibrato_range * 6.25)
+						quarter_wavelength_in_ticks = furnace_ticks_to_tad_ticks(64/vibrato_speed/4, speed_at_each_row[row_index][0], tad_timer_value)
+						out.append("MP%d,%d" % (depth_in_cents, quarter_wavelength_in_ticks))
 				elif effect_type in (0x0A, 0xFA, 0xF3, 0xF4): # Volume slide up/down
 					if effect_value != 0:
 						slide_amount = 0
@@ -560,6 +583,8 @@ class FurnacePattern(object):
 					if note.note == None and most_recent_note != None:
 						note.note = most_recent_note
 						apply_legato()
+				elif effect_type == 0xE4: # Vibrato range
+					vibrato_range = effect_value
 				elif effect_type == 0xEA: # Legato
 					legato = bool(effect_value)
 				elif effect_type == 0xF8: # Single tick volume up

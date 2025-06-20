@@ -39,6 +39,13 @@ def find_recently_used_instrument(sequence, index):
 		index -= 1
 	return None
 
+def find_recently_used_vibrato(sequence, index):
+	while index > 0:
+		if sequence[index].startswith("MP"):
+			return sequence[index]
+		index -= 1
+	return None
+
 def replace_with_loops(input):
 	out = []
 
@@ -175,13 +182,24 @@ def replace_with_subroutines(channel, mml_sequences):
 
 				# Find the most recently used instrument
 				recently_used_instrument = find_recently_used_instrument(sequence, index)
-				mml_sequences[subroutine_name] = (["?" + recently_used_instrument] if recently_used_instrument != None else [])  + try_sequence
+				recently_used_vibrato    = find_recently_used_vibrato(sequence, index)
+				prefix_subroutine_with = []
+				if recently_used_instrument != None:
+					prefix_subroutine_with.append("?" + recently_used_instrument)
+				if recently_used_vibrato    != None and recently_used_vibrato != "MP0":
+					prefix_subroutine_with.append(recently_used_vibrato)
+
+				mml_sequences[subroutine_name] = prefix_subroutine_with + try_sequence
+
 				instrument_switch_in_subroutine = find_recently_used_instrument(try_sequence, len(try_sequence)-1)
+				vibrato_switch_in_subroutine    = find_recently_used_vibrato(try_sequence, len(try_sequence)-1)
 
 				for i in range(sequence_size):
 					replace_with = subroutine_name if i == 0 else "" # Replace removed tokens with placeholders to keep token_locations useful
 					if i == 1 and instrument_switch_in_subroutine != recently_used_instrument and instrument_switch_in_subroutine != None:
 						replace_with = instrument_switch_in_subroutine # Instrument switches in subroutines don't stick, so carry it into the main sequence
+					elif i == 2 and vibrato_switch_in_subroutine != recently_used_vibrato and vibrato_switch_in_subroutine != None:
+						replace_with = vibrato_switch_in_subroutine
 					sequence[index+i] = replace_with
 					for m in match_at:
 						sequence[m+i] = replace_with
