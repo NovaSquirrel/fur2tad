@@ -475,8 +475,8 @@ class FurnacePattern(object):
 				out.append("@%s" % song.furnace_file.instruments[current_instrument].name)
 
 			# Write any volume changes
-			if note.volume != current_volume and note.volume != None:
-				current_volume = note.volume
+			if (current_volume == None or (note.volume != current_volume * 2)) and note.volume != None:
+				current_volume = note.volume * 2
 				out.append("V%d" % current_volume)
 
 			if note.note: # Seems that any note without 03xx on it stops portamento
