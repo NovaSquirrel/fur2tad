@@ -93,6 +93,13 @@ def any_effects_are_volume_slide(note):
 def any_effects_are_pitch_sweep(note):
 	return any(lambda x:effect[0] in (0x01, 0x02) for effect in note.effects)
 
+def convert_volume(furnace_volume):
+	if furnace_volume == None:
+		return None
+	if furnace_volume == 0:
+		return 0
+	return furnace_volume*2 + (furnace_volume & 1)
+
 # -------------------------------------------------------------------
 
 block_handlers = {}
@@ -475,8 +482,8 @@ class FurnacePattern(object):
 				out.append("@%s" % song.furnace_file.instruments[current_instrument].name)
 
 			# Write any volume changes
-			if (current_volume == None or (note.volume != current_volume * 2)) and note.volume != None:
-				current_volume = note.volume * 2
+			if (current_volume == None or convert_volume(note.volume) != current_volume) and note.volume != None:
+				current_volume = convert_volume(note.volume)
 				out.append("V%d" % current_volume)
 
 			if note.note: # Seems that any note without 03xx on it stops portamento
