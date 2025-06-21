@@ -529,7 +529,7 @@ class FurnacePattern(object):
 						vibrato_depth = effect_value & 15
 						# 6.25 is 1/16*100
 						depth_in_cents = round(vibrato_depth/15 * vibrato_range * 6.25)
-						quarter_wavelength_in_ticks = furnace_ticks_to_tad_ticks(64/vibrato_speed/4, furnace_ticks_per_row, tad_timer_value)
+						quarter_wavelength_in_ticks = furnace_ticks_to_tad_ticks(64/vibrato_speed/4, furnace_ticks_per_second, tad_timer_value)
 						out.append("MP%d,%d" % (depth_in_cents, quarter_wavelength_in_ticks))
 				elif effect_type in (0x0A, 0xFA, 0xF3, 0xF4): # Volume slide up/down
 					if effect_value != 0:
@@ -553,7 +553,7 @@ class FurnacePattern(object):
 							total_slide_amount = round(furnace_ticks * (slide_amount / 2))
 							if abs(total_slide_amount) > 255:
 								too_far_amount = abs(total_slide_amount) - 255
-								tad_ticks -= furnace_ticks_to_tad_ticks(too_far_amount / (slide_amount*2), furnace_ticks_per_row, tad_timer_value)
+								tad_ticks -= furnace_ticks_to_tad_ticks(too_far_amount / (slide_amount*2), furnace_ticks_per_second, tad_timer_value)
 								total_slide_amount = 255 if slide_amount > 0 else -255
 							if tad_ticks > 256:
 								print("Volume slide at %d took too long" % row_index)
