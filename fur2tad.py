@@ -238,7 +238,7 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 		sf = io.BytesIO(feature_data)
 
 		if feature == b'NA':
-			instrument.name = read_string(sf)
+			instrument.name = read_string(sf).replace(" ", "_")
 		elif feature == b'SM':
 			instrument.initial_sample = bytes_to_int(sf.read(2))
 			b = bytes_to_int(sf.read(1)) # flags
@@ -443,6 +443,8 @@ class FurnacePattern(object):
 		portamento_speed = None
 		portamento_from = None
 		portamento_target = None
+		noise_mode = False
+		noise_frequency = 0
 
 		while row_index < len(self.rows):
 			previous_most_recent_note = most_recent_note
@@ -479,6 +481,7 @@ class FurnacePattern(object):
 
 			if note.note: # Seems that any note without 03xx on it stops portamento
 				portamento_speed = None
+			no_portamento_legato = False
 
 			# Effects
 			for effect_type, effect_value in note.effects:
@@ -602,6 +605,16 @@ class FurnacePattern(object):
 					if note.note == None and most_recent_note != None:
 						note.note = most_recent_note
 						apply_legato()
+				elif effect_type in (0xE1, 0xE2): # Note slide up/down
+					semitones = effect_value & 15
+					portamento_speed = (effect_value >> 4) * 4
+					no_portamento_legato = note.note != None
+
+					if portamento_speed == 0:
+						portamento_speed = None
+					else:
+						portamento_from = note.note if note.note != None else most_recent_note
+						portamento_target = (portamento_from + semitones) if effect_type == 0xE1 else (portamento_from - semitones)
 				elif effect_type == 0xE4: # Vibrato range
 					vibrato_range = effect_value
 				elif effect_type == 0xEA: # Legato
@@ -614,7 +627,8 @@ class FurnacePattern(object):
 			# Write the note itself
 			next_note_is_actually_a_note = next_note and next_note.note and (next_note.note == NoteValue.OFF or (next_note.note >= NoteValue.FIRST and next_note.note <= NoteValue.LAST))
 			if portamento_speed != None:
-				apply_legato()
+				if not no_portamento_legato:
+					apply_legato()
 
 				furnace_ticks_from_rows = row_count_to_furnace_ticks(duration)
 				furnace_ticks_to_get_to_target = round(abs(portamento_target - portamento_from) * 32 / portamento_speed)
