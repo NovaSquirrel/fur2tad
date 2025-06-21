@@ -372,8 +372,8 @@ class FurnacePattern(object):
 				return
 			for index in range(len(out)-1, -1, -1): # Otherwise, find the most recent note
 				token = out[index]
-				if token_is_note(token):
-					if not token.endswith("&"):
+				if token_is_note(token) or token.startswith("N"):
+					if token != "N-" and (not token.endswith("&")):
 						out[index] += "&"
 					return
 
@@ -560,7 +560,7 @@ class FurnacePattern(object):
 				elif effect_type in (0x09, 0xF0): # Speed change
 					out.append("T%d" % tad_timer_value)
 				elif effect_type == 0x11: # Toggle noise
-					noise_mode = bool(effect_value) # TODO
+					noise_mode = bool(effect_value)
 				elif effect_type == 0x12: # Echo
 					out.append("E1" if effect_value else "E0")
 				elif effect_type == 0x13: # Pitch modulation
@@ -571,7 +571,10 @@ class FurnacePattern(object):
 					else:
 						out.append("i" + ("L" if effect_value & 0xF0 else "") + ("R" if effect_value & 0x0F else ""))
 				elif effect_type == 0x1D: # Noise frequency
-					noise_frequency = effect_value & 31 # TODO
+					noise_frequency = effect_value & 31
+					if not note.note and most_recent_note != NoteValue.OFF:
+						apply_legato()
+						note.note = most_recent_note
 				elif effect_type == 0x80: # Set pan
 					out.append("p%d" % int(effect_value / 255 * 128))
 				elif effect_type == 0x83: # Pan slide
@@ -664,7 +667,10 @@ class FurnacePattern(object):
 				if arpeggio_enabled:
 					out.append("{{%s %s %s}}%%%d,%%%d" % (note_name_from_index(note.note), note_name_from_index(note.note + arpeggio_note1), note_name_from_index(note.note + arpeggio_note2), duration_in_tad_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / speed_at_each_row[row_index][1]))) ))
 				else:
-					note_name = note_name_from_index(note.note)
+					if noise_mode:
+						note_name = "N%d," % noise_frequency
+					else:
+						note_name = note_name_from_index(note.note)
 					if not next_note or next_note.note != None:
 						out.append("%s%%%d" % (note_name, duration_in_tad_ticks))
 					else:
