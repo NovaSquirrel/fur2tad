@@ -440,8 +440,12 @@ class FurnacePattern(object):
 		most_recent_note = None
 		pitch_slide_rate = None
 		vibrato_range = 15
+		portamento_speed = None
+		portamento_from = None
+		portamento_target = None
 
 		while row_index < len(self.rows):
+			previous_most_recent_note = most_recent_note
 			note = self.rows[row_index]
 			if note.note != None:
 				most_recent_note = note.note
@@ -456,9 +460,10 @@ class FurnacePattern(object):
 				next_index = len(self.rows)
 			duration = next_index - row_index
 
-			tad_timer_value, tad_ticks_per_row = find_timer_and_multiplier_for_tempo_and_speed(speed_at_each_row[row_index][0], speed_at_each_row[row_index][1])
-			duration_in_ticks = row_count_to_tad_ticks(duration)
-
+			furnace_ticks_per_second, furnace_ticks_per_row = speed_at_each_row[row_index]
+			tad_timer_value, tad_ticks_per_row = find_timer_and_multiplier_for_tempo_and_speed(furnace_ticks_per_second, furnace_ticks_per_row)
+			duration_in_tad_ticks = row_count_to_tad_ticks(duration)
+			
 			if ("loop", None) in note.effects:
 				out.append("L")
 
@@ -471,6 +476,9 @@ class FurnacePattern(object):
 			if note.volume != current_volume and note.volume != None:
 				current_volume = note.volume
 				out.append("V%d" % current_volume)
+
+			if note.note: # Seems that any note without 03xx on it stops portamento
+				portamento_speed = None
 
 			# Effects
 			for effect_type, effect_value in note.effects:
@@ -497,7 +505,13 @@ class FurnacePattern(object):
 							apply_legato()
 				elif effect_type == 0x03: # Portamento
 					# effect_value is an amount of pitch to add/subtract per Furnace tick, in 1/32 semitone units
-					pass
+					portamento_speed = effect_value
+					if portamento_speed == 0:
+						portamento_speed = None
+					else:
+						if note.note:
+							portamento_from = previous_most_recent_note
+							portamento_target = note.note
 				elif effect_type == 0x04: # Vibrato
 					# Furnace seems to have a 64-entry sequence for vibrato, and every Furnace tick, it adds the speed number to the index for this
 					if (effect_value & 0xF0 == 0) or (effect_value & 0x0F == 0):
@@ -512,7 +526,7 @@ class FurnacePattern(object):
 						vibrato_depth = effect_value & 15
 						# 6.25 is 1/16*100
 						depth_in_cents = round(vibrato_depth/15 * vibrato_range * 6.25)
-						quarter_wavelength_in_ticks = furnace_ticks_to_tad_ticks(64/vibrato_speed/4, speed_at_each_row[row_index][0], tad_timer_value)
+						quarter_wavelength_in_ticks = furnace_ticks_to_tad_ticks(64/vibrato_speed/4, furnace_ticks_per_row, tad_timer_value)
 						out.append("MP%d,%d" % (depth_in_cents, quarter_wavelength_in_ticks))
 				elif effect_type in (0x0A, 0xFA, 0xF3, 0xF4): # Volume slide up/down
 					if effect_value != 0:
@@ -535,7 +549,9 @@ class FurnacePattern(object):
 							tad_ticks = row_count_to_tad_ticks(slide_rows)
 							total_slide_amount = round(furnace_ticks * (slide_amount / 2))
 							if abs(total_slide_amount) > 255:
-								total_slide_amount = 255 if total_slide_amount > 0 else -255
+								too_far_amount = abs(total_slide_amount) - 255
+								tad_ticks -= furnace_ticks_to_tad_ticks(too_far_amount / (slide_amount*2), furnace_ticks_per_row, tad_timer_value)
+								total_slide_amount = 255 if slide_amount > 0 else -255
 							if tad_ticks > 256:
 								print("Volume slide at %d took too long" % row_index)
 								tad_ticks = 256
@@ -593,7 +609,41 @@ class FurnacePattern(object):
 					out.append("V-%d" % (effect_value*2))
 
 			# Write the note itself
-			if pitch_slide_rate != None and most_recent_note != None and note.note != NoteValue.OFF and most_recent_note != NoteValue.OFF:
+			next_note_is_actually_a_note = next_note and next_note.note and (next_note.note == NoteValue.OFF or (next_note.note >= NoteValue.FIRST and next_note.note <= NoteValue.LAST))
+			if portamento_speed != None:
+				apply_legato()
+
+				furnace_ticks_from_rows = row_count_to_furnace_ticks(duration)
+				furnace_ticks_to_get_to_target = round(abs(portamento_target - portamento_from) * 32 / portamento_speed)
+				if furnace_ticks_from_rows >= furnace_ticks_to_get_to_target:
+					slide_tad_ticks = furnace_ticks_to_tad_ticks(furnace_ticks_to_get_to_target, furnace_ticks_per_second, tad_timer_value)
+					leftover_tad_ticks = duration_in_tad_ticks - slide_tad_ticks
+					note_start_name = note_name_from_index(portamento_from)
+					note_stop_name = note_name_from_index(portamento_target)
+
+					out.append("{%s %s}%%%d" % (note_start_name, note_stop_name, slide_tad_ticks))
+					if leftover_tad_ticks:
+						apply_legato()
+						if next_note_is_actually_a_note:
+							out.append("r%%%d" % (leftover_tad_ticks))
+						else:
+							out.append("w%%%d" % (leftover_tad_ticks))
+					elif not(next_note_is_actually_a_note):
+						apply_legato()
+					most_recent_note = portamento_target
+				else:
+					# Note enough time to finish the portamento - so how far does it actually get?
+					slide_amount = round(furnace_ticks_from_rows / 32 * portamento_speed)
+					if portamento_target < portamento_from:
+						slide_amount = -slide_amount
+					ending_note = portamento_from + slide_amount
+
+					note_start_name = note_name_from_index(portamento_from)
+					note_stop_name = note_name_from_index(ending_note)
+					most_recent_note = ending_note
+
+					out.append("{%s %s}%%%d%s" % (note_start_name, note_stop_name, duration_in_tad_ticks, "&" if not next_note_is_actually_a_note else ""))
+			elif pitch_slide_rate != None and most_recent_note != None and note.note != NoteValue.OFF and most_recent_note != NoteValue.OFF:
 				furnace_ticks = row_count_to_furnace_ticks(duration)
 				total_slide_amount = round(furnace_ticks * pitch_slide_rate)
 
@@ -605,22 +655,22 @@ class FurnacePattern(object):
 				note_stop_name = note_name_from_index(ending_note)
 				most_recent_note = ending_note
 
-				out.append("{%s %s}%%%d" % (note_start_name, note_stop_name, duration_in_ticks))
-			elif (note.note == None or note.note == NoteValue.OFF) and next_note and next_note.note and (next_note.note == NoteValue.OFF or (next_note.note >= NoteValue.FIRST and next_note.note <= NoteValue.LAST)): # The next non-empty row is either a note cut or a note
-				out.append("r%%%d" % duration_in_ticks)
+				out.append("{%s %s}%%%d" % (note_start_name, note_stop_name, duration_in_tad_ticks))
+			elif (note.note == None or note.note == NoteValue.OFF) and next_note_is_actually_a_note: # The next non-empty row is either a note cut or a note
+				out.append("r%%%d" % duration_in_tad_ticks)
 			elif note.note != None and note.note >= NoteValue.FIRST and note.note <= NoteValue.LAST:
 				if legato:
 					apply_legato()
 				if arpeggio_enabled:
-					out.append("{{%s %s %s}}%%%d,%%%d" % (note_name_from_index(note.note), note_name_from_index(note.note + arpeggio_note1), note_name_from_index(note.note + arpeggio_note2), duration_in_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / speed_at_each_row[row_index][1]))) ))
+					out.append("{{%s %s %s}}%%%d,%%%d" % (note_name_from_index(note.note), note_name_from_index(note.note + arpeggio_note1), note_name_from_index(note.note + arpeggio_note2), duration_in_tad_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / speed_at_each_row[row_index][1]))) ))
 				else:
 					note_name = note_name_from_index(note.note)
 					if not next_note or next_note.note != None:
-						out.append("%s%%%d" % (note_name, duration_in_ticks))
+						out.append("%s%%%d" % (note_name, duration_in_tad_ticks))
 					else:
-						out.append("%s%%%d&" % (note_name, duration_in_ticks))
+						out.append("%s%%%d&" % (note_name, duration_in_tad_ticks))
 			else:
-				out.append("w%%%d" % duration_in_ticks)
+				out.append("w%%%d" % duration_in_tad_ticks)
 			row_index = next_index
 		if legato:
 			apply_legato()
