@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 # https://github.com/tildearrow/furnace/blob/master/papers/format.md
-import zlib, io, struct, math, sys
+import zlib, io, struct, math, argparse, sys
 from compress_mml import compress_mml
 from enum import IntEnum
 CHANNELS = 8
@@ -35,6 +35,9 @@ class NoteValue(IntEnum):
 	OFF = 180
 	RELEASE = 181
 	MACRO_RELEASE = 182
+	FIRST_VALID_TAD = 12*5
+	LAST_VALID_TAD = 12*(5 + 6) + 11
+
 
 notes = ["c", "c+", "d", "d+", "e", "f", "f+", "g", "g+", "a", "a+", "b"]
 def note_name_from_index(i):
@@ -65,23 +68,77 @@ def find_timer_and_multiplier_for_tempo_and_speed(ticks_per_second, ticks_per_ro
 	if (ticks_per_second, ticks_per_row) in cached_timer_and_multiplier:
 		return cached_timer_and_multiplier[(ticks_per_second, ticks_per_row)]
 	milliseconds_per_tempo_tick = 1 / ticks_per_second * 1000
+	actual_row_milliseconds = milliseconds_per_tempo_tick * ticks_per_row # Actual duration of each row
 
-	row_milliseconds = milliseconds_per_tempo_tick * ticks_per_row # Actual duration of each row
+	if auto_timer_mode == "lowest_error":
+		options = sorted(timer_and_multiplier_search(actual_row_milliseconds))
+		best_timer = options[0][1]
+		best_multiply = options[0][2]
 
-	best_timer     = None
-	best_multiply  = None
-	lowest_error   = None
+	else: # low_error
+		best_timer     = None
+		best_multiply  = None
+		lowest_error   = None
 
-	for timer_value, timer_ms in possible_timer_milliseconds:
-		fractional_part, integer_part = math.modf(row_milliseconds / timer_ms)
-		milliseconds_with_this_timer_option = timer_ms * integer_part
-		error = abs(row_milliseconds - milliseconds_with_this_timer_option)
-		if lowest_error == None or lowest_error > error:
-			lowest_error  = error
-			best_timer    = timer_value
-			best_multiply = int(integer_part)
+		for timer_value, timer_ms in possible_timer_milliseconds:
+			fractional_part, integer_part = math.modf(actual_row_milliseconds / timer_ms)
+			milliseconds_with_this_timer_option = timer_ms * integer_part
+			error = abs(actual_row_milliseconds - milliseconds_with_this_timer_option)
+			if lowest_error == None or lowest_error > error:
+				lowest_error  = error
+				best_timer    = timer_value
+				best_multiply = int(integer_part)
+
 	cached_timer_and_multiplier[(ticks_per_second, ticks_per_row)] = (best_timer, best_multiply)
 	return (best_timer, best_multiply)
+
+def timer_and_multiplier_search(actual_row_milliseconds, maximum_error=2):
+	low_error_options = set() # Indexed by multiplier
+	for timer_option in possible_timer_milliseconds:
+		for multiply in range(1, 60):
+			milliseconds_with_this_timer_option = timer_option[1] * multiply
+			error = abs(actual_row_milliseconds - milliseconds_with_this_timer_option)
+			if error < maximum_error:
+				low_error_options.add((error, timer_option[0], multiply))
+	return low_error_options
+
+cached_timer_and_multipliers_for_speed_pattern = {}
+def find_timer_and_multipliers_for_speed_pattern(ticks_per_second, speed_pattern):
+	cached = cached_timer_and_multipliers_for_speed_pattern.get((ticks_per_second, tuple(speed_pattern)))
+	if cached != None:
+		return cached
+	maximum_error = 2
+	speeds_used = set(speed_pattern)
+	milliseconds_per_tempo_tick = 1 / ticks_per_second * 1000
+
+	while True:
+		options_for_speeds = []
+		for ticks_per_row in speeds_used:
+			actual_row_milliseconds = milliseconds_per_tempo_tick * ticks_per_row
+			options_for_speeds.append(timer_and_multiplier_search(actual_row_milliseconds, maximum_error=maximum_error))
+
+		# Which timer values are available to all speed settings?
+		available_timer_values = set.intersection(*[ {_[1] for _ in speed} for speed in options_for_speeds ])
+		if len(available_timer_values) == 0:
+			if maximum_error == 5:
+				return None
+			maximum_error = 5
+			continue
+
+		# Decide on which timer value to use
+		best_timer_value = None
+		best_error = None
+		options_for_speeds = [{_[1]:_ for _ in speed} for speed in options_for_speeds]
+		for timer_value in sorted(available_timer_values):
+			total_error = sum([_[timer_value][0] for _ in options_for_speeds])
+			if best_error == None or best_error > total_error:
+				best_error = total_error
+				best_timer_value = timer_value
+
+		multiplier_for_speed_value = {_[0]:_[1][best_timer_value][2] for _ in zip(speeds_used, options_for_speeds)}
+		out = [multiplier_for_speed_value[_] for _ in speed_pattern]
+		cached_timer_and_multipliers_for_speed_pattern[(ticks_per_second, tuple(speed_pattern))] = (best_timer_value, out)
+		return (best_timer_value, out)
 
 def furnace_ticks_to_tad_ticks(furnace_ticks, furnace_ticks_per_second, tad_timer):
 	milliseconds_per_tempo_tick = 1 / furnace_ticks_per_second * 1000
@@ -190,7 +247,32 @@ def FurnaceInfoBlock(furnace_file, name, data, s):
 	song.virtual_tempo_numerator   = bytes_to_int(s.read(2))
 	song.virtual_tempo_denominator = bytes_to_int(s.read(2))
 
-	# Don't bother with fields past this point for now, though that means I don't have the speed pattern
+	read_string(s) # First subsong name
+	read_string(s) # First subsong comment
+	number_of_subsongs = bytes_to_int(s.read(1))
+	s.read(3)
+	s.read(4 * number_of_subsongs) # Subsong pointers
+	read_string(s) # System name
+	read_string(s) # Album/category/game name
+	read_string(s) # Song name (Japanese)
+	read_string(s) # Song author (Japanese)
+	read_string(s) # System name (Japanese)
+	read_string(s) # Album/category/game name(Japanese)
+	s.read(4 * 3)  # Extra chip output settings
+	patchbay_count = bytes_to_int(s.read(4))
+	s.read(4 * patchbay_count)
+	s.read(1)      # Automatic patchbay
+	s.read(8)      # Compatibility flags
+
+	song.speed_pattern_length = bytes_to_int(s.read(1))
+	song.speed_pattern        = list(s.read(16))[0:song.speed_pattern_length]
+
+	furnace_file.groove_patterns = []
+	number_of_groove_patterns = bytes_to_int(s.read(1))
+	for _ in range(number_of_groove_patterns):
+		groove_size = bytes_to_int(s.read(1))
+		groove_pattern = list(s.read(16))[0:groove_size]
+		furnace_file.groove_patterns.append(groove_pattern)
 
 @block_handler("SONG")
 def FurnaceSubsongBlock(furnace_file, name, data, s):
@@ -200,9 +282,10 @@ def FurnaceSubsongBlock(furnace_file, name, data, s):
 	song.name    = read_string(s)
 	song.comment = read_string(s)
 	song.read_orders(s)
-	song.speed_pattern_length      = bytes_to_int(s.read(1))
-	song.speed_pattern             = bytes_to_int(s.read(16))
-	
+
+	song.speed_pattern_length = bytes_to_int(s.read(1))
+	song.speed_pattern        = list(s.read(16))[0:song.speed_pattern_length]
+
 @block_handler("ADIR")
 def FurnaceAssetDirectoryBlock(furnace_file, name, data, s):
 	pass
@@ -415,11 +498,12 @@ class FurnacePattern(object):
 			total_ticks = 0
 			check_index = row_index
 			for _ in range(row_count):
-				tad_timer_value, tad_ticks_per_row = find_timer_and_multiplier_for_tempo_and_speed(speed_at_each_row[check_index][0], speed_at_each_row[check_index][1])
-				total_ticks += tad_ticks_per_row
+				total_ticks += speed_at_each_row[check_index][3]
 				check_index += 1
 				if check_index >= len(self.rows):
 					check_index = loop_point
+					if loop_point == None:
+						check_index = len(self.rows)-1 # Keep using the last row's speed I guess?
 			return total_ticks
 
 		def row_count_to_furnace_ticks(row_count):
@@ -469,8 +553,7 @@ class FurnacePattern(object):
 				next_index = len(self.rows)
 			duration = next_index - row_index
 
-			furnace_ticks_per_second, furnace_ticks_per_row = speed_at_each_row[row_index]
-			tad_timer_value, tad_ticks_per_row = find_timer_and_multiplier_for_tempo_and_speed(furnace_ticks_per_second, furnace_ticks_per_row)
+			furnace_ticks_per_second, furnace_ticks_per_row, tad_timer_value, tad_ticks_per_row = speed_at_each_row[row_index]
 			duration_in_tad_ticks = row_count_to_tad_ticks(duration)
 			
 			if ("loop", None) in note.effects:
@@ -489,6 +572,7 @@ class FurnacePattern(object):
 			if note.note: # Seems that any note without 03xx on it stops portamento
 				portamento_speed = None
 			no_portamento_legato = False
+			already_changed_timer = False
 
 			# Effects
 			for effect_type, effect_value in note.effects:
@@ -567,8 +651,10 @@ class FurnacePattern(object):
 								tad_ticks = 256
 							if slide_rows != None:
 								out.append("Vs%s%d,%d" % ("+" if total_slide_amount>=0 else "", total_slide_amount, tad_ticks))
-				elif effect_type in (0x09, 0xF0): # Speed change
-					out.append("T%d" % tad_timer_value)
+				elif effect_type in (0x09, 0x0F, 0xF0): # Speed change
+					if ((row_index == 0 and tad_timer_value != song.tad_timer_value_at_start) or (row_index != 0 and tad_timer_value != speed_at_each_row[row_index-1][2])) and not already_changed_timer:
+						out.append("T%d" % tad_timer_value)
+						already_changed_timer = True
 				elif effect_type == 0x11: # Toggle noise
 					noise_mode = bool(effect_value)
 				elif effect_type == 0x12: # Echo
@@ -674,7 +760,7 @@ class FurnacePattern(object):
 				if note.note == None or legato:
 					apply_legato()
 				starting_note = note.note if note.note != None else most_recent_note
-				ending_note = min(NoteValue.LAST, max(NoteValue.FIRST, starting_note + total_slide_amount))
+				ending_note = min(NoteValue.LAST_VALID_TAD, max(NoteValue.FIRST_VALID_TAD, starting_note + total_slide_amount))
 				note_start_name = note_name_from_index(starting_note)
 				note_stop_name = note_name_from_index(ending_note)
 				most_recent_note = ending_note
@@ -686,7 +772,7 @@ class FurnacePattern(object):
 				if legato:
 					apply_legato()
 				if arpeggio_enabled:
-					out.append("{{%s %s %s}}%%%d,%%%d" % (note_name_from_index(note.note), note_name_from_index(note.note + arpeggio_note1), note_name_from_index(note.note + arpeggio_note2), duration_in_tad_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / speed_at_each_row[row_index][1]))) ))
+					out.append("{{%s %s %s}}%%%d,%%%d" % (note_name_from_index(note.note), note_name_from_index(note.note + arpeggio_note1), note_name_from_index(note.note + arpeggio_note2), duration_in_tad_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / furnace_ticks_per_row))) ))
 				else:
 					if noise_mode:
 						note_name = "N%d," % noise_frequency
@@ -751,8 +837,18 @@ class FurnaceSong(object):
 			out += "#Title %s\n" % song.name
 		if song.author:
 			out += "#Composer %s\n" % song.author
-		tad_timer_value, tad_ticks_per_row = find_timer_and_multiplier_for_tempo_and_speed(self.ticks_per_second, self.speed1)
+
+		groove_mode = len(song.speed_pattern) > 1
+		multiple_groove_patterns = self.furnace_file.groove_patterns != []
+
+		if groove_mode:
+			tad_timer_value, tad_ticks_per_row = find_timer_and_multipliers_for_speed_pattern(self.ticks_per_second, self.speed_pattern)
+		else:
+			tad_timer_value, tad_ticks_per_row = find_timer_and_multiplier_for_tempo_and_speed(self.ticks_per_second, self.speed1)
+			tad_ticks_per_row = [tad_ticks_per_row]
+
 		out += "#Timer %d\n" % tad_timer_value
+		self.tad_timer_value_at_start = tad_timer_value
 
 		out += "\n"
 
@@ -772,9 +868,12 @@ class FurnaceSong(object):
 
 		order_index = 0  # Order row
 		row_index = 0    # Pattern row
+		speed_pattern_index = 0
 		new_order = True
 		current_ticks_per_second = song.ticks_per_second
-		current_ticks_per_row = song.speed1
+		current_speed_pattern = song.speed_pattern
+		need_to_remake_tad_ticks_per_row = False
+
 		stop_order_processing = False
 		while order_index < song.orders_length:
 			if new_order:
@@ -803,11 +902,31 @@ class FurnaceSong(object):
 					elif effect_type == 0xFF: # Don't loop
 						loop_point = None
 						stop_order_processing = True
-					elif effect_type == 0x09: # Set ticks-per-row (speed 1)
-						current_ticks_per_row = effect_value
+					elif effect_type == 0x09: # Set ticks-per-row (speed 1) - or change groove pattern
+						if multiple_groove_patterns:
+							if effect_value < len(self.furnace_file.groove_patterns) and current_speed_pattern != self.furnace_file.groove_patterns[effect_value]:
+								current_speed_pattern = self.furnace_file.groove_patterns[effect_value]
+								speed_pattern_index = 0
+								need_to_remake_tad_ticks_per_row = True
+						elif current_speed_pattern[0] != effect_value:
+							current_speed_pattern[0] = effect_value
+							need_to_remake_tad_ticks_per_row = True
+					elif effect_type == 0x0F: # Set ticks-per-row (speed 2)
+						if not multiple_groove_patterns and song.speed_pattern[-1] != effect_value:
+							song.speed_pattern[-1] = effect_value
+							need_to_remake_tad_ticks_per_row = True
 					elif effect_type == 0xF0: # Set BPM
 						current_ticks_per_second = effect_value / 2.5
-			speed_at_each_row.append((current_ticks_per_second, current_ticks_per_row))
+						need_to_remake_tad_ticks_per_row = True
+			if need_to_remake_tad_ticks_per_row:
+				if groove_mode:
+					tad_timer_value, tad_ticks_per_row = find_timer_and_multipliers_for_speed_pattern(self.ticks_per_second, current_speed_pattern)
+				else:
+					tad_timer_value, tad_ticks_per_row = find_timer_and_multiplier_for_tempo_and_speed(self.ticks_per_second, current_speed_pattern[0])
+					tad_ticks_per_row = [tad_ticks_per_row]
+				need_to_remake_tad_ticks_per_row = False
+			speed_at_each_row.append( (current_ticks_per_second, current_speed_pattern[speed_pattern_index % len(current_speed_pattern)], tad_timer_value, tad_ticks_per_row[speed_pattern_index % len(tad_ticks_per_row)]) )
+			speed_pattern_index += 1
 			if stop_order_processing:
 				break
 			# Onto the next row, and potentially the next order row
@@ -867,8 +986,35 @@ class FurnaceFile(object):
 			else:
 				print("Unrecognized block: ", block_name)
 
-if len(sys.argv) < 1:
-	sys.exit("Please provide a filename")
-f = FurnaceFile(sys.argv[1])
+# -------------------------------------------------------------------
+parser = argparse.ArgumentParser(prog='fur2tad', description='Converts Furnace files to Terrific Audio Driver MML')
+parser.add_argument('filename')
+parser.add_argument('--auto-timer-mode', type=str) # Options: low_error lowest_error
+parser.add_argument('--timer-override', action='extend', nargs="+", type=str) # Format: bpm,speed=tad timer rate, tad ticks
+args = parser.parse_args()
+
+auto_timer_mode = (args.auto_timer_mode or "low_error").lower()
+if auto_timer_mode not in ("low_error", "lowest_error"):
+	sys.exit("Invalid --auto-timer-mode setting:" % auto_timer_mode)
+
+if args.timer_override != None:
+	for timer_override_string in args.timer_override:
+		timer_override_split = timer_override_string.split("=")
+		assert len(timer_override_split) == 2
+		timer_override_split_input  = timer_override_split[0].split(",")
+		timer_override_split_output = timer_override_split[1].split(",")
+		furnace_tempo = int(timer_override_split_input[0])
+		furnace_speed = int(timer_override_split_input[1])
+		if "." in timer_override_split_output[0]:
+			tad_rate = int(round(float(timer_override_split_output[0]) / 0.125))
+		else:
+			tad_rate = int(timer_override_split_output[0])
+		if tad_rate < 64 or tad_rate > 256:
+			sys.exit("Invalid TAD timer rate in --timer-override: %s" % timer_override_string)
+		tad_ticks = int(timer_override_split_output[1])
+		
+		cached_timer_and_multiplier[(furnace_tempo/2.5, furnace_speed)] = (tad_rate, tad_ticks)
+
+f = FurnaceFile(args.filename)
 for song in f.songs:
 	print(song.convert_to_tad())

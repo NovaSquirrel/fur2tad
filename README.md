@@ -32,7 +32,6 @@ These effects may have limitations or even be implemented incorrectly, because F
 * FF: **Stop song** - Stops the song from looping
 
 Some Furnace features that are not supported:
-* Groove - But I would like to support it if I can figure out an efficient way to
 * Macros
 * Virtual tempo
 * Wavetable
