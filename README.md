@@ -13,7 +13,7 @@ These effects may have limitations or even be implemented incorrectly, because F
 * 03: **Portamento**
 * 04: **Vibrato** - Uses TAD's "MP vibrato" feature
 * 0A, FA, F3, F4: **Volume slide**
-* 09, F0: **Speed change**
+* 09, 0F, F0: **Speed change**
 * 11: **Toggle noise mode** - Should have 11 and 1D on the same channel
 * 12: **Echo on/off**
 * 13: **Pitch modulation**
