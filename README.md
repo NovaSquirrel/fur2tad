@@ -8,12 +8,13 @@ The converter currently takes one command line argument: the filename of a Furna
 # Effects supported
 These effects may have limitations or even be implemented incorrectly, because Furnace's manual is missing a lot of details on how effects actually work and that required reverse engineering.
 
+Note effects:
 * 00: **Arpeggio** - Cannot be combined with portamento
 * 01, 02: **Pitch slide up/down** - Ending point of the slide is rounded to the nearest semitone
 * 03: **Portamento**
 * 04: **Vibrato** - Uses TAD's "MP vibrato" feature
 * 0A, FA, F3, F4: **Volume slide**
-* 09, 0F, F0: **Speed change**
+* 09, 0F, F0: **Speed change** - Works for switching between groove patterns
 * 11: **Toggle noise mode** - Should have 11 and 1D on the same channel
 * 12: **Echo on/off**
 * 13: **Pitch modulation**
@@ -27,12 +28,16 @@ These effects may have limitations or even be implemented incorrectly, because F
 * EA: **Legato**
 * F8, F9: **Single tick volume up/down**
 
+Jumping between patterns:
 * 0D: **Jump to next pattern**
 * 0B: **Jump to order row** - Sets a loop point if jumping backwards
 * FF: **Stop song** - Stops the song from looping
 
+Other supported features:
+* Groove/speed patterns
+
 Some Furnace features that are not supported:
-* Macros
+* Macros (Except for arpeggio macros that have only one step)
 * Virtual tempo
 * Wavetable
 * Sample map

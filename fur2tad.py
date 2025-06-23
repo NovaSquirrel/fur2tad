@@ -40,7 +40,8 @@ class NoteValue(IntEnum):
 
 
 notes = ["c", "c+", "d", "d+", "e", "f", "f+", "g", "g+", "a", "a+", "b"]
-def note_name_from_index(i):
+def note_name_from_index(i, offset):
+	i      += offset
 	note   = i % 12
 	octave = i // 12 - 5
 	return "o" + str(octave) + notes[note]
@@ -363,6 +364,41 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 			instrument.sustain_mode = (b >> 5) & 3
 
 			# TODO: Figure out what to do with these fields
+		elif feature == b'MA':
+			sf.read(2) # Macro data size
+			while True:
+				macro_code = sf.read(1)
+				if len(macro_code) == 0:
+					break
+				if macro_code[0] == 255:
+					break
+				macro_length = bytes_to_int(sf.read(1))
+				macro_loop = bytes_to_int(sf.read(1))
+				macro_release = bytes_to_int(sf.read(1))
+				macro_mode = bytes_to_int(sf.read(1))
+				macro_open_type_word_size = bytes_to_int(sf.read(1))
+				macro_delay = bytes_to_int(sf.read(1))
+				macro_speed = bytes_to_int(sf.read(1))
+
+				signed = True
+				word_size = 1
+				if macro_open_type_word_size & 0xC0 == 0x00:
+					signed = False
+				elif macro_open_type_word_size & 0xC0 == 0x40:
+					word_size = 1
+				elif macro_open_type_word_size & 0xC0 == 0x80:
+					word_size = 2
+				elif macro_open_type_word_size & 0xC0 == 0xC0:
+					word_size = 4
+
+				macro_data = []
+				for _ in range(macro_length):
+					macro_data.append(bytes_to_int(sf.read(word_size), signed=signed))
+
+				if macro_code[0] == 1: # Arpeggio
+					instrument.semitone_offset = macro_data[-1]
+				else:
+					print("Unsupported macro type", macro_code[0])
 		else:
 			pass
 			#print("Unrecognized instrument feature", feature)
@@ -429,6 +465,7 @@ class FurnaceInstrument(object):
 	def __init__(self):
 		# Set defaults
 		self.initial_sample = 0
+		self.semitone_offset = 0
 
 class FurnaceSample(object):
 	def __init__(self):
@@ -563,6 +600,7 @@ class FurnacePattern(object):
 			if note.instrument != current_instrument and note.instrument != None:
 				current_instrument = note.instrument
 				out.append("@%s" % song.furnace_file.instruments[current_instrument].name)
+			semitone_offset = song.furnace_file.instruments[current_instrument].semitone_offset if current_instrument != None else 0
 
 			# Write any volume changes
 			if (current_volume == None or convert_volume(note.volume) != current_volume) and note.volume != None:
@@ -728,8 +766,8 @@ class FurnacePattern(object):
 				if furnace_ticks_from_rows >= furnace_ticks_to_get_to_target:
 					slide_tad_ticks = furnace_ticks_to_tad_ticks(furnace_ticks_to_get_to_target, furnace_ticks_per_second, tad_timer_value)
 					leftover_tad_ticks = duration_in_tad_ticks - slide_tad_ticks
-					note_start_name = note_name_from_index(portamento_from)
-					note_stop_name = note_name_from_index(portamento_target)
+					note_start_name = note_name_from_index(portamento_from, semitone_offset)
+					note_stop_name = note_name_from_index(portamento_target, semitone_offset)
 
 					out.append("{%s %s}%%%d" % (note_start_name, note_stop_name, slide_tad_ticks))
 					if leftover_tad_ticks:
@@ -748,8 +786,8 @@ class FurnacePattern(object):
 						slide_amount = -slide_amount
 					ending_note = portamento_from + slide_amount
 
-					note_start_name = note_name_from_index(portamento_from)
-					note_stop_name = note_name_from_index(ending_note)
+					note_start_name = note_name_from_index(portamento_from, semitone_offset)
+					note_stop_name = note_name_from_index(ending_note, semitone_offset)
 					most_recent_note = ending_note
 
 					out.append("{%s %s}%%%d%s" % (note_start_name, note_stop_name, duration_in_tad_ticks, "&" if not next_note_is_actually_a_note else ""))
@@ -761,8 +799,8 @@ class FurnacePattern(object):
 					apply_legato()
 				starting_note = note.note if note.note != None else most_recent_note
 				ending_note = min(NoteValue.LAST_VALID_TAD, max(NoteValue.FIRST_VALID_TAD, starting_note + total_slide_amount))
-				note_start_name = note_name_from_index(starting_note)
-				note_stop_name = note_name_from_index(ending_note)
+				note_start_name = note_name_from_index(starting_note, semitone_offset)
+				note_stop_name = note_name_from_index(ending_note, semitone_offset)
 				most_recent_note = ending_note
 
 				out.append("{%s %s}%%%d" % (note_start_name, note_stop_name, duration_in_tad_ticks))
@@ -772,12 +810,12 @@ class FurnacePattern(object):
 				if legato:
 					apply_legato()
 				if arpeggio_enabled:
-					out.append("{{%s %s %s}}%%%d,%%%d" % (note_name_from_index(note.note), note_name_from_index(note.note + arpeggio_note1), note_name_from_index(note.note + arpeggio_note2), duration_in_tad_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / furnace_ticks_per_row))) ))
+					out.append("{{%s %s %s}}%%%d,%%%d" % (note_name_from_index(note.note, semitone_offset), note_name_from_index(note.note + arpeggio_note1, semitone_offset), note_name_from_index(note.note + arpeggio_note2, semitone_offset), duration_in_tad_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / furnace_ticks_per_row))) ))
 				else:
 					if noise_mode:
 						note_name = "N%d," % noise_frequency
 					else:
-						note_name = note_name_from_index(note.note)
+						note_name = note_name_from_index(note.note, semitone_offset)
 					if not next_note or next_note.note != None:
 						out.append("%s%%%d" % (note_name, duration_in_tad_ticks))
 					else:
@@ -1018,3 +1056,4 @@ if args.timer_override != None:
 f = FurnaceFile(args.filename)
 for song in f.songs:
 	print(song.convert_to_tad())
+	print()
