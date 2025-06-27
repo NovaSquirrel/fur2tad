@@ -1031,7 +1031,7 @@ class FurnaceSong(object):
 			compress_mml(k, mml_sequences, not args.disable_loop_compression, not args.disable_sub_compression)
 		for k,v in mml_sequences.items():
 			if any(not _.startswith("w%") and _ != "L" for _ in v): # Sequence must not consist entirely of waits
-				out += k + " " + " ".join(v).replace("%0 r%", "%") + "\n"
+				out += k + " " + " ".join([_ for _ in v if _]).replace("%0 r%", "%") + "\n"
 		return out
 
 class FurnaceFile(object):
