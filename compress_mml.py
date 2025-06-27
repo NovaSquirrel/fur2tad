@@ -153,15 +153,10 @@ def replace_with_subroutines(channel, mml_sequences):
 			elif t.startswith("]"):
 				loop_level -= 1
 				if loop_level < 0:
-					has_invalid_tokens = True
 					break
 			elif t == "L":
-				has_invalid_tokens = True
 				break
 			try_sequence.append(t)
-		if has_invalid_tokens:
-			index += 1
-			break
 		# Trim any unfinished loops
 		while loop_level:
 			if try_sequence == []:
@@ -169,7 +164,7 @@ def replace_with_subroutines(channel, mml_sequences):
 			t = try_sequence.pop()
 			if t == "[":
 				loop_level -= 1
-		if loop_level:
+		if loop_level or len(try_sequence) < MIN_SUBROUTINE_LENGTH:
 			index += 1
 			continue
 

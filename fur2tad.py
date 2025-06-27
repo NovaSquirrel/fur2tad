@@ -804,7 +804,11 @@ class FurnacePattern(object):
 					note_start_name = note_name_from_index(portamento_from, semitone_offset)
 					note_stop_name = note_name_from_index(portamento_target, semitone_offset)
 
-					if slide_tad_ticks > 0:
+					if slide_tad_ticks <= 0 or portamento_from == portamento_target: # If it's a zero tick portamento then just do the target note
+						out.append("%s%%%d" % (note_stop_name, duration_in_tad_ticks))
+						if not(next_note_is_actually_a_note):
+							apply_legato()
+					else:
 						out.append("{%s %s}%%%d" % (note_start_name, note_stop_name, slide_tad_ticks))
 						if leftover_tad_ticks:
 							apply_legato()
@@ -814,10 +818,7 @@ class FurnacePattern(object):
 								out.append("w%%%d" % (leftover_tad_ticks))
 						elif not(next_note_is_actually_a_note):
 							apply_legato()
-					else: # If it's a zero tick portamento then just do the target note
-						out.append("%s%%%d" % (note_stop_name, duration_in_tad_ticks))
-						if not(next_note_is_actually_a_note):
-							apply_legato()
+
 					most_recent_note = portamento_target
 				else:
 					# Note enough time to finish the portamento - so how far does it actually get?
@@ -830,7 +831,10 @@ class FurnacePattern(object):
 					note_stop_name = note_name_from_index(ending_note, semitone_offset)
 					most_recent_note = ending_note
 
-					out.append("{%s %s}%%%d%s" % (note_start_name, note_stop_name, duration_in_tad_ticks, "&" if not next_note_is_actually_a_note else ""))
+					if portamento_from == ending_note:
+						out.append("%s%%%d%s" % (note_stop_name, duration_in_tad_ticks, "&" if not next_note_is_actually_a_note else ""))
+					else:
+						out.append("{%s %s}%%%d%s" % (note_start_name, note_stop_name, duration_in_tad_ticks, "&" if not next_note_is_actually_a_note else ""))
 			elif pitch_slide_rate != None and most_recent_note != None and note.note != NoteValue.OFF and most_recent_note != NoteValue.OFF:
 				furnace_ticks = row_count_to_furnace_ticks(duration)
 				total_slide_amount = round(furnace_ticks * pitch_slide_rate)
@@ -843,7 +847,10 @@ class FurnacePattern(object):
 				note_stop_name = note_name_from_index(ending_note, semitone_offset)
 				most_recent_note = ending_note
 
-				out.append("{%s %s}%%%d" % (note_start_name, note_stop_name, duration_in_tad_ticks))
+				if starting_note == ending_note:
+					out.append("%s%%%d" % (note_stop_name, duration_in_tad_ticks))
+				else:
+					out.append("{%s %s}%%%d" % (note_start_name, note_stop_name, duration_in_tad_ticks))
 			elif (note.note == None or note.note == NoteValue.OFF) and next_note_is_actually_a_note: # The next non-empty row is either a note cut or a note
 				add_rest(duration_in_tad_ticks)
 			elif note.note != None and note.note >= NoteValue.FIRST and note.note <= NoteValue.LAST:
