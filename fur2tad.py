@@ -1021,11 +1021,10 @@ class FurnaceSong(object):
 		# Now we have one long pattern for each channel
 		mml_sequences = {"ABCDEFGH"[channel]:pattern.convert_to_tad(self, speed_at_each_row, loop_point) for channel,pattern in enumerate(combined_patterns)}
 		for k in "ABCDEFGH":
-			compress_mml(k, mml_sequences)
+			compress_mml(k, mml_sequences, not args.disable_loop_compression, not args.disable_sub_compression)
 		for k,v in mml_sequences.items():
 			if any(not _.startswith("w%") and _ != "L" for _ in v): # Sequence must not consist entirely of waits
 				out += k + " " + " ".join(v).replace("%0 r%", "%") + "\n"
-
 		return out
 
 class FurnaceFile(object):
@@ -1070,6 +1069,8 @@ parser.add_argument('filename')
 parser.add_argument('--auto-timer-mode', type=str) # Options: low_error lowest_error
 parser.add_argument('--timer-override', action='extend', nargs="+", type=str) # Format: bpm,speed=tad timer rate, tad ticks
 parser.add_argument('--ignore-arp-macro', action='store_true')
+parser.add_argument('--disable-loop-compression', action='store_true')
+parser.add_argument('--disable-sub-compression', action='store_true')
 args = parser.parse_args()
 
 auto_timer_mode = (args.auto_timer_mode or "low_error").lower()

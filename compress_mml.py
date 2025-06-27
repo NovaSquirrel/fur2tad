@@ -147,8 +147,14 @@ def replace_with_subroutines(channel, mml_sequences):
 			t = sequence[i]
 			if t == "[":
 				loop_level += 1
+			elif t == ":" and loop_level <= 0:
+				has_invalid_tokens = True
+				break
 			elif t.startswith("]"):
 				loop_level -= 1
+				if loop_level < 0:
+					has_invalid_tokens = True
+					break
 			elif t == "L":
 				has_invalid_tokens = True
 				break
@@ -228,9 +234,11 @@ def optimize_subroutines(mml_sequences):
 	# TODO
 	pass
 
-def compress_mml(channel, mml_sequences):
-	# Find loops
-	for _ in range(LOOP_PASSES):
-		mml_sequences[channel] = replace_with_loops(mml_sequences[channel])
-	replace_with_subroutines(channel, mml_sequences)
-	optimize_subroutines(mml_sequences)
+def compress_mml(channel, mml_sequences, loop_compression, sub_compression):
+	if loop_compression:
+		# Find loops
+		for _ in range(LOOP_PASSES):
+			mml_sequences[channel] = replace_with_loops(mml_sequences[channel])
+	if sub_compression:
+		replace_with_subroutines(channel, mml_sequences)
+		optimize_subroutines(mml_sequences)
