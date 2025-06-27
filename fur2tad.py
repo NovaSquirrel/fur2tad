@@ -396,7 +396,8 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 					macro_data.append(bytes_to_int(sf.read(word_size), signed=signed))
 
 				if macro_code[0] == 1: # Arpeggio
-					instrument.semitone_offset = macro_data[-1]
+					if args.ignore_arp_macro != True:
+						instrument.semitone_offset = macro_data[-1]
 				else:
 					print("Unsupported macro type", macro_code[0])
 		else:
@@ -504,6 +505,38 @@ class FurnacePattern(object):
 						out[index] += "&"
 					return
 
+		def add_rest(tad_ticks):
+			if len(out):
+				index = -1
+				total_wait_amount = 0
+
+				# Are there waits between the note and the rest that's being added?
+				while True:
+					if index < -len(out):
+						out.append("r%%%d" % (tad_ticks))
+						return
+					if out[index].startswith("w"):
+						total_wait_amount += int(out[index].split("%")[1])
+						index -= 1
+					else:
+						break
+
+				previous = out[index]
+				if token_is_note(previous) and previous.endswith("&"):
+					s = previous.rstrip("&").split("%")
+					new_duration = int(s[1]) + tad_ticks + total_wait_amount
+					s[1] = str(new_duration)
+					out[index] = "%".join(s)
+					if new_duration < 2: # 2 ticks are required for a key-off note
+						out[index] += "&"
+
+					# Clean up the waits that were combined together
+					pop_amount = (-index)-1
+					for i in range(0, pop_amount):
+						out.pop()
+					return
+			out.append("r%%%d" % (tad_ticks))
+
 		def find_next_note_with(condition, wrap_around=False):
 			search_index = row_index + 1
 			while True:
@@ -573,6 +606,7 @@ class FurnacePattern(object):
 		portamento_target = None
 		noise_mode = False
 		noise_frequency = 0
+		already_wrote_loop = False
 
 		while row_index < len(self.rows):
 			previous_most_recent_note = most_recent_note
@@ -593,8 +627,9 @@ class FurnacePattern(object):
 			furnace_ticks_per_second, furnace_ticks_per_row, tad_timer_value, tad_ticks_per_row = speed_at_each_row[row_index]
 			duration_in_tad_ticks = row_count_to_tad_ticks(duration)
 			
-			if ("loop", None) in note.effects:
+			if ("loop", None) in note.effects and not already_wrote_loop:
 				out.append("L")
+				already_wrote_loop = True # TODO: Figure out why it's attempting to insert it multiple times?
 
 			# Write any instrument changes
 			if note.instrument != current_instrument and note.instrument != None:
@@ -769,15 +804,20 @@ class FurnacePattern(object):
 					note_start_name = note_name_from_index(portamento_from, semitone_offset)
 					note_stop_name = note_name_from_index(portamento_target, semitone_offset)
 
-					out.append("{%s %s}%%%d" % (note_start_name, note_stop_name, slide_tad_ticks))
-					if leftover_tad_ticks:
-						apply_legato()
-						if next_note_is_actually_a_note:
-							out.append("r%%%d" % (leftover_tad_ticks))
-						else:
-							out.append("w%%%d" % (leftover_tad_ticks))
-					elif not(next_note_is_actually_a_note):
-						apply_legato()
+					if slide_tad_ticks > 0:
+						out.append("{%s %s}%%%d" % (note_start_name, note_stop_name, slide_tad_ticks))
+						if leftover_tad_ticks:
+							apply_legato()
+							if next_note_is_actually_a_note:
+								add_rest(leftover_tad_ticks)
+							else:
+								out.append("w%%%d" % (leftover_tad_ticks))
+						elif not(next_note_is_actually_a_note):
+							apply_legato()
+					else: # If it's a zero tick portamento then just do the target note
+						out.append("%s%%%d" % (note_stop_name, duration_in_tad_ticks))
+						if not(next_note_is_actually_a_note):
+							apply_legato()
 					most_recent_note = portamento_target
 				else:
 					# Note enough time to finish the portamento - so how far does it actually get?
@@ -805,7 +845,7 @@ class FurnacePattern(object):
 
 				out.append("{%s %s}%%%d" % (note_start_name, note_stop_name, duration_in_tad_ticks))
 			elif (note.note == None or note.note == NoteValue.OFF) and next_note_is_actually_a_note: # The next non-empty row is either a note cut or a note
-				out.append("r%%%d" % duration_in_tad_ticks)
+				add_rest(duration_in_tad_ticks)
 			elif note.note != None and note.note >= NoteValue.FIRST and note.note <= NoteValue.LAST:
 				if legato:
 					apply_legato()
@@ -984,7 +1024,7 @@ class FurnaceSong(object):
 			compress_mml(k, mml_sequences)
 		for k,v in mml_sequences.items():
 			if any(not _.startswith("w%") and _ != "L" for _ in v): # Sequence must not consist entirely of waits
-				out += k + " " + " ".join(v) + "\n"
+				out += k + " " + " ".join(v).replace("%0 r%", "%") + "\n"
 
 		return out
 
@@ -1029,6 +1069,7 @@ parser = argparse.ArgumentParser(prog='fur2tad', description='Converts Furnace f
 parser.add_argument('filename')
 parser.add_argument('--auto-timer-mode', type=str) # Options: low_error lowest_error
 parser.add_argument('--timer-override', action='extend', nargs="+", type=str) # Format: bpm,speed=tad timer rate, tad ticks
+parser.add_argument('--ignore-arp-macro', action='store_true')
 args = parser.parse_args()
 
 auto_timer_mode = (args.auto_timer_mode or "low_error").lower()
