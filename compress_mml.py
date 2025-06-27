@@ -176,7 +176,7 @@ def replace_with_subroutines(channel, mml_sequences):
 				if sequence[try_at:try_at+sequence_size] == try_sequence:
 					match_at.append(try_at)
 
-			if match_at: # Replace
+			if match_at: # Matches found, so do the replacements
 				subroutine_name = "!sub%d" % subroutine_count
 				subroutine_count += 1
 
@@ -204,16 +204,23 @@ def replace_with_subroutines(channel, mml_sequences):
 					for m in match_at:
 						sequence[m+i] = replace_with
 				break
+
+			# Remove one token
 			t = try_sequence.pop()
 			if t.startswith("]"):
 				loop_level = 1
 				while loop_level:
-					t = try_sequence.pop()
+					if len(try_sequence):
+						t = try_sequence.pop()
+					else:
+						break
 					if t == "[":
 						loop_level -= 1
 					elif t.startswith("]"):
 						loop_level.pop()
 						loop_level += 1
+				if loop_level:
+					break
 		index += 1
 	mml_sequences[channel] = [_ for _ in sequence if _] # Remove placeholders
 

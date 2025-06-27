@@ -507,16 +507,16 @@ class FurnacePattern(object):
 		def find_next_note_with(condition, wrap_around=False):
 			search_index = row_index + 1
 			while True:
-				if search_index == row_index:
-					return None
-				if condition(self.rows[search_index]):
-					return search_index
-				search_index += 1
 				if search_index >= len(self.rows):
 					if wrap_around:
 						search_index = loop_point
 					else:
 						return None
+				if search_index == row_index:
+					return None
+				if condition(self.rows[search_index]):
+					return search_index
+				search_index += 1
 
 		def count_rows_until_note_with(condition):
 			row_count = 0
