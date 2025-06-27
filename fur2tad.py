@@ -522,7 +522,7 @@ class FurnacePattern(object):
 						break
 
 				previous = out[index]
-				if token_is_note(previous) and previous.endswith("&"):
+				if token_is_note(previous) and (not previous.startswith("{")) and previous.endswith("&"):
 					s = previous.rstrip("&").split("%")
 					new_duration = int(s[1]) + tad_ticks + total_wait_amount
 					s[1] = str(new_duration)
