@@ -148,6 +148,8 @@ class ImpulseTrackerFile(object):
 			instrument.sample_count = bytes_to_int(s.read(1))
 			s.read(1) # Reserved
 			instrument.name = s.read(26).decode()
+			if args.remove_instrument_names:
+				instrument.name = "instrument%d" % instrument_number
 			# Ignore the rest for now
 			instruments.append(instrument)
 
@@ -165,6 +167,8 @@ class ImpulseTrackerFile(object):
 			sample.flags          = bytes_to_int(s.read(1))
 			sample.default_volume = bytes_to_int(s.read(1))
 			sample.name           = s.read(26).decode()
+			if args.remove_instrument_names:
+				sample.name = "sample%d" % sample_number
 			sample.convert_flags  = bytes_to_int(s.read(1))
 			sample.default_pan    = bytes_to_int(s.read(1))
 			sample.sample_length  = bytes_to_int(s.read(4))
@@ -241,7 +245,7 @@ class ImpulseTrackerFile(object):
 						# Convert 0-63 volume to 0-255
 						volume = last_volume[channel]
 						if   volume >= 0   and volume <= 64:  # Volume
-							note.volume = volume * 4 + volume & 3
+							note.volume = volume * 4 + (volume & 3)
 						elif volume >= 65  and volume <= 74:  # Fine volume up
 							value = volume - 65
 							effects.append(("D", (value << 4) | 0x0F)) # DxF
@@ -269,6 +273,9 @@ class ImpulseTrackerFile(object):
 						elif volume >= 203 and volume <= 212: # Vibrato depth (keep the same vibrato speed and only change the depth)
 							value = volume - 203
 							effects.append(("h", value)) # Don't use "H" because speed is not specified; so "h" effect just for this
+					else:
+						note.volume = 255
+
 					if mask_variable & 0x88: # Effect
 						effect_id    = (last_effect[channel] & 255)
 						if effect_id == 0 or effect_id > 0x1C:

@@ -315,6 +315,7 @@ def FurnaceSampleBlock(furnace_file, name, data, s):
 	sample.loop_end           = bytes_to_int(s.read(4), signed=True)
 	sample.data               = s.read(sample.length)
 
+instrument_counter = 0
 @block_handler("INS2")
 def FurnaceInstrumentBlock(furnace_file, name, data, s):
 	format_version = bytes_to_int(s.read(2))
@@ -335,6 +336,10 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 
 		if feature == b'NA':
 			instrument.name = read_string(sf).replace(" ", "_")
+			if args.remove_instrument_names:
+				global instrument_counter
+				instrument.name = "instrument%d" % instrument_counter
+				instrument_counter += 1
 		elif feature == b'SM':
 			instrument.initial_sample = bytes_to_int(sf.read(2))
 			b = bytes_to_int(sf.read(1)) # flags
@@ -562,14 +567,14 @@ class FurnacePattern(object):
 			row_count = 0
 			search_index = row_index + 1
 			while True:
+				if search_index >= len(self.rows):
+					search_index = loop_point
 				if search_index == row_index:
 					return None
 				if condition(self.rows[search_index]):
 					return row_count
 				search_index += 1
 				row_count += 1
-				if search_index >= len(self.rows):
-					search_index = loop_point
 
 		def row_count_to_tad_ticks(row_count):
 			total_ticks = 0
@@ -646,7 +651,7 @@ class FurnacePattern(object):
 
 			# Write any volume changes
 			if (current_volume == None or note.volume != current_volume) and note.volume != None:
-				current_volume = note.volume
+				current_volume = min(255, max(0, note.volume))
 				out.append("V%d" % current_volume)
 
 			if note.note: # Seems that any note without 03xx on it stops portamento
@@ -729,7 +734,7 @@ class FurnacePattern(object):
 							if tad_ticks > 256:
 								print("Volume slide at %d took too long" % row_index)
 								tad_ticks = 256
-							if slide_rows != None:
+							if slide_rows != None and total_slide_amount and tad_ticks:
 								out.append("Vs%s%d,%d" % ("+" if total_slide_amount>=0 else "", total_slide_amount, tad_ticks))
 				elif effect_type in (0x09, 0x0F, 0xF0): # Speed change
 					if ((row_index == 0 and tad_timer_value != song.tad_timer_value_at_start) or (row_index != 0 and tad_timer_value != speed_at_each_row[row_index-1][2])) and not already_changed_timer:
@@ -1012,7 +1017,7 @@ class TrackerSong(object):
 					for effect_type in previous_row_effects[channel]:
 						if effect_type in EFFECTS_WITH_IT_AUTO_CANCEL and effect_type not in this_row_effects:
 							this_effect_category = EFFECT_CATEGORY[effect_type]
-							if not any(EFFECT_CATEGORY[_] == this_effect_category for _ in this_row_effects):
+							if not any(EFFECT_CATEGORY[_] == this_effect_category for _ in this_row_effects if _ in EFFECT_CATEGORY):
 								note.effects.append(IT_EFFECT_CANCEL_OVERRIDE.get(effect_type, (effect_type, 0)) )
 
 				previous_row_effects[channel] = this_row_effects
@@ -1131,6 +1136,7 @@ parser.add_argument('--timer-override', action='extend', nargs="+", type=str) # 
 parser.add_argument('--ignore-arp-macro', action='store_true')
 parser.add_argument('--disable-loop-compression', action='store_true')
 parser.add_argument('--disable-sub-compression', action='store_true')
+parser.add_argument('--remove-instrument-names', action='store_true')
 args = parser.parse_args()
 auto_timer_mode = (args.auto_timer_mode or "low_error").lower()
 if auto_timer_mode not in ("low_error", "lowest_error"):
