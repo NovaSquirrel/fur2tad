@@ -46,7 +46,7 @@ EFFECT_CATEGORY = {
 	0x80: "pan", 0x83: "pan", 0x84: "pan",
 }
 # Which effects need to be stopped if not continued on Impulse Tracker?
-EFFECTS_WITH_IT_AUTO_CANCEL = {0x00, 0x01, 0x02, 0x03, 0x04, 0x07, 0x0A, 0x80, 0x83, 0x84}
+EFFECTS_WITH_IT_AUTO_CANCEL = {0x00, 0x01, 0x02, 0x03, 0x04, 0x07, 0x0A, 0x83, 0x84}
 EFFECTS_WITH_IT_CONTINUE    = {0x00, 0x01, 0x02, 0x03, 0x04, 0x07, 0x0A, 0x83, 0x84}
 # Use a specific effect+parameter to stop a specific effect instead of using zero
 IT_EFFECT_CANCEL_OVERRIDE = {0x80: (0x80, 0x80)}
@@ -939,6 +939,8 @@ class TrackerSong(object):
 		# Impulse tracker state
 		previous_row_effects = [set() for _ in range(CHANNELS)]
 		it_effect_memory = [{} for _ in range(CHANNELS)]
+		effects_used_by_channel = [set() for _ in range(CHANNELS)]
+		panning_active = [False for _ in range(CHANNELS)]
 
 		stop_order_processing = False
 		while order_index < self.orders_length:
@@ -988,8 +990,11 @@ class TrackerSong(object):
 					elif effect_type == 0xF0: # Set BPM
 						current_ticks_per_second = effect_value / 2.5
 						need_to_remake_tad_ticks_per_row = True
+					elif effect_type == 0x80:
+						panning_active[channel] = effect_value != 0x80
 					elif impulse_tracker and effect_type in EFFECTS_WITH_IT_CONTINUE:
-						if effect_value == it_effect_memory[channel].get(effect_type, None) and effect_type in previous_row_effects:
+						# Try to remove unnecessary repeated effects, unless the effect is at the start of a pattern, in which case put it there in case it's a loop point
+						if effect_value == it_effect_memory[channel].get(effect_type, None) and effect_type in previous_row_effects and row_index != 0:
 							note.effects[effect_index] = (None, None)
 						elif effect_value == 0: # If the "continue" is a "restart effect", put the effect
 							if effect_type not in previous_row_effects:
@@ -998,6 +1003,10 @@ class TrackerSong(object):
 							else: # If the "continue" really is a continue, remove it
 								note.effects[effect_index] = (None, None)
 					it_effect_memory[channel][effect_type] = effect_value
+					effects_used_by_channel[channel].add(effect_type)
+				if note.note and panning_active[channel] and 0x80 not in this_row_effects:
+					note.effects.append( (0x80, 0x80) )
+					panning_active[channel] = False
 
 				if impulse_tracker and previous_row_effects[channel]:
 					for effect_type in previous_row_effects[channel]:
@@ -1029,6 +1038,11 @@ class TrackerSong(object):
 		if loop_point != None:
 			for channel in range(CHANNELS):
 				combined_patterns[channel].rows[loop_point].effects.append(("loop",None))
+				if impulse_tracker: # For Impulse Tracker, cancel out effects at the loop point, if the effect is used in that channel. But don't do it if the loop point sets that effect to something else.
+					effect_types_at_loop_point = set(_[0] for _ in combined_patterns[channel].rows[loop_point].effects)
+					for effect_type in EFFECTS_WITH_IT_AUTO_CANCEL.union( set((0x80,)) ):
+						if effect_type in effects_used_by_channel[channel] and effect_type not in effect_types_at_loop_point:
+							combined_patterns[channel].rows[loop_point].effects.append(IT_EFFECT_CANCEL_OVERRIDE.get(effect_type, (effect_type, 0)) )
 
 		# Now we have one long pattern for each channel
 		mml_sequences = {"ABCDEFGH"[channel]:pattern.convert_to_tad(self, speed_at_each_row, loop_point) for channel,pattern in enumerate(combined_patterns)}
