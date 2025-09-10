@@ -218,7 +218,7 @@ def replace_with_subroutines(channel, mml_sequences):
 					if t == "[":
 						loop_level -= 1
 					elif t.startswith("]"):
-						loop_level.pop()
+						try_sequence.pop()
 						loop_level += 1
 				if loop_level:
 					break
