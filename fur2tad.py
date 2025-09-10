@@ -619,6 +619,7 @@ class FurnacePattern(object):
 		noise_mode = False
 		noise_frequency = 0
 		already_wrote_loop = False
+		most_recent_vibrato = None
 
 		while row_index < len(self.rows):
 			previous_most_recent_note = most_recent_note
@@ -694,7 +695,9 @@ class FurnacePattern(object):
 				elif effect_type == 0x04: # Vibrato
 					# Furnace seems to have a 64-entry sequence for vibrato, and every Furnace tick, it adds the speed number to the index for this
 					if (effect_value & 0xF0 == 0) or (effect_value & 0x0F == 0):
-						out.append("MP0")
+						if most_recent_vibrato != "MP0":
+							out.append("MP0")
+							most_recent_vibrato = "MP0"
 					else:
 						for check_effect in note.effects: # Make sure vibrato range gets applied even if it's in a later effect column
 							if check_effect[0] == 0xE4: # Vibrato range
@@ -706,7 +709,10 @@ class FurnacePattern(object):
 						# 6.25 is 1/16*100
 						depth_in_cents = round(vibrato_depth/15 * vibrato_range * 6.25)
 						quarter_wavelength_in_ticks = furnace_ticks_to_tad_ticks(64/vibrato_speed/4, furnace_ticks_per_second, tad_timer_value)
-						out.append("MP%d,%d" % (depth_in_cents, quarter_wavelength_in_ticks))
+						this_vibrato = "MP%d,%d" % (depth_in_cents, quarter_wavelength_in_ticks)
+						if this_vibrato != most_recent_vibrato:
+							out.append(this_vibrato)
+							most_recent_vibrato = this_vibrato
 				elif effect_type in (0x0A, 0xFA, 0xF3, 0xF4): # Volume slide up/down
 					if effect_value != 0:
 						slide_amount = 0
