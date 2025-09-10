@@ -1004,6 +1004,15 @@ class TrackerSong(object):
 					elif effect_type == 0x80:
 						panning_active[channel] = effect_value != 0x80
 					elif impulse_tracker and effect_type in EFFECTS_WITH_IT_CONTINUE:
+						# Handle vibrato and tremolo and panbrello having two separate "continue" slots
+						if effect_type in (0x04, 0x07, 0x84):
+							memory = it_effect_memory[channel].get(effect_type, 0)
+							if (effect_value & 0x0F) == 0:
+								effect_value = (effect_value & 0xF0) | (memory & 0x0F)
+							if (effect_value & 0xF0) == 0:
+								effect_value = (effect_value & 0x0F) | (memory & 0xF0)
+							note.effects[effect_index] = (effect_type, effect_value)
+
 						# Try to remove unnecessary repeated effects, unless the effect is at the start of a pattern, in which case put it there in case it's a loop point
 						if effect_value == it_effect_memory[channel].get(effect_type, None) and effect_type in previous_row_effects and row_index != 0:
 							note.effects[effect_index] = (None, None)

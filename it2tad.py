@@ -272,7 +272,7 @@ class ImpulseTrackerFile(object):
 							effects.append(("G", (0x00, 0x01, 0x04, 0x08, 0x10, 0x20, 0x40, 0x60, 0x80, 0xFF)[value]))
 						elif volume >= 203 and volume <= 212: # Vibrato depth (keep the same vibrato speed and only change the depth)
 							value = volume - 203
-							effects.append(("h", value)) # Don't use "H" because speed is not specified; so "h" effect just for this
+							effects.append(("H", value)) # 0 for speed, so it will be "continue"
 					else:
 						note.volume = 255
 
@@ -365,7 +365,7 @@ class ImpulseTrackerFile(object):
 		else:
 			self.instruments = samples
 
-		#print(song.patterns[0][0].rows)
+		print(song.patterns[0][0].rows)
 
 f = ImpulseTrackerFile(args.filename)
 print(f.song.convert_to_tad(impulse_tracker = True))
