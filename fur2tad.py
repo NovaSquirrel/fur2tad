@@ -38,6 +38,18 @@ class NoteValue(IntEnum):
 	FIRST_VALID_TAD = 12*5
 	LAST_VALID_TAD = 12*(5 + 6) + 11
 
+EFFECT_CATEGORY = {
+	0x0A: "volume", 0xD3: "volume", 0xD4: "volume", 0xF3: "volume", 0xF4: "volume", 0xF8: "volume", 0xF9: "volume", 0xFA: "volume",
+	0x07: "tremolo", # Combine with volume?
+	0x00: "arpeggio", 0x04: "vibrato",
+	0x01: "pitch", 0x02: "pitch", 0x03: "pitch", 0xF1: "pitch", 0xF2: "pitch",
+	0x80: "pan", 0x83: "pan", 0x84: "pan",
+}
+# Which effects need to be stopped if not continued on Impulse Tracker?
+EFFECTS_WITH_IT_AUTO_CANCEL = {0x00, 0x01, 0x02, 0x03, 0x04, 0x07, 0x0A, 0x80, 0x83, 0x84}
+EFFECTS_WITH_IT_CONTINUE    = {0x00, 0x01, 0x02, 0x03, 0x04, 0x07, 0x0A, 0x83, 0x84}
+# Use a specific effect+parameter to stop a specific effect instead of using zero
+IT_EFFECT_CANCEL_OVERRIDE = {0x80: (0x80, 0x80)}
 
 notes = ["c", "c+", "d", "d+", "e", "f", "f+", "g", "g+", "a", "a+", "b"]
 def note_name_from_index(i, offset):
@@ -150,13 +162,6 @@ def any_effects_are_volume_slide(note):
 	return any(lambda x:effect[0] in (0x0A, 0xFA, 0xF3, 0xF4, 0xFA) for effect in note.effects)
 def any_effects_are_pitch_sweep(note):
 	return any(lambda x:effect[0] in (0x01, 0x02) for effect in note.effects)
-
-def convert_volume(furnace_volume):
-	if furnace_volume == None:
-		return None
-	if furnace_volume == 0:
-		return 0
-	return furnace_volume*2 + (furnace_volume & 1)
 
 # -------------------------------------------------------------------
 
@@ -443,7 +448,8 @@ def FurnacePatternBlock(furnace_file, name, data, s):
 				note.instrument = bytes_to_int(s.read(1))
 				song.instruments_used.add(note.instrument)
 			if b & 4:
-				note.volume = bytes_to_int(s.read(1))
+				volume = bytes_to_int(s.read(1))
+				note.volume = volume*2 + (volume & 1) # Convert 0-127 to 0-255
 			read_effect(note, b & 8, b & 16)
 			if effect1 != None:
 				#read_effect(note, effect1 & 1,  effect1 & 2)
@@ -476,14 +482,15 @@ class FurnaceNote(object):
 	def __init__(self):
 		self.note       = None
 		self.instrument = None
-		self.volume     = None
-		self.effects    = []
+		self.volume     = None # Actually 0-255 like TAD instead of 0-127 like Furnace
+		self.effects    = []   # List of (type, value)
+		self.it_effects = []
 	def __repr__(self):
-		return "%s %s %s %s" % (self.note, self.instrument, self.volume, self.effects)
+		return "%s %s %s %s" % (self.note, self.instrument, self.volume, self.it_effects or self.effects)
 	def __eq__(self, other):
-		return self.note == other.note and self.instrument == other.instrument and self.volume == other.volume and self.effects == other.effects
+		return self.note == other.note and self.instrument == other.instrument and self.volume == other.volume and self.effects == other.effects and self.it_effects == other.it_effects
 	def is_empty(self):
-		return self.note == None and self.instrument == None and self.volume == None and self.effects == []
+		return self.note == None and self.instrument == None and self.volume == None and self.effects == [] and self.it_effects == []
 
 class FurnacePattern(object):
 	def __init__(self):
@@ -638,8 +645,8 @@ class FurnacePattern(object):
 			semitone_offset = song.furnace_file.instruments[current_instrument].semitone_offset if current_instrument != None else 0
 
 			# Write any volume changes
-			if (current_volume == None or convert_volume(note.volume) != current_volume) and note.volume != None:
-				current_volume = convert_volume(note.volume)
+			if (current_volume == None or note.volume != current_volume) and note.volume != None:
+				current_volume = note.volume
 				out.append("V%d" % current_volume)
 
 			if note.note: # Seems that any note without 03xx on it stops portamento
@@ -877,55 +884,24 @@ class FurnacePattern(object):
 	def __eq__(self, other):
 		return self.rows == other.rows
 
-class FurnaceSong(object):
-	def __init__(self, furnace_file, stream):
-		self.furnace_file = furnace_file
-		furnace_file.songs.append(self)
-
-		# Parse the data at the start; this is common to both INFO and SONG
-		self.time_base = bytes_to_int(stream.read(1))
-		self.speed1 = bytes_to_int(stream.read(1))
-		self.speed2 = bytes_to_int(stream.read(1))
-		self.initial_arpeggio_time = bytes_to_int(stream.read(1))
-		self.ticks_per_second = bytes_to_float(stream.read(4))
-		self.pattern_length = bytes_to_int(stream.read(2))
-		self.orders_length = bytes_to_int(stream.read(2))
-		self.highlight_A = bytes_to_int(stream.read(1))
-		self.highlight_B = bytes_to_int(stream.read(1))
-
-		# Initialize
+class TrackerSong(object):
+	def __init__(self):
 		self.instruments_used = set()
-		self.patterns = [{} for _ in range(CHANNELS)]        # self.patterns[channel][pattern_id]
-		self.empty_patterns = set()                          # each entry is (channel, pattern_id)
+		self.patterns = [{} for _ in range(CHANNELS)] # self.patterns[channel][pattern_id]
+		self.empty_patterns = set()                   # each entry is (channel, pattern_id)
 
-	def read_orders(self, stream):
-		self.orders              = []
-		for i in range(CHANNELS):
-			column = []
-			for j in range(self.orders_length):
-				column.append(bytes_to_int(stream.read(1)))
-			self.orders.append(column)
-		self.effect_column_count = stream.read(CHANNELS)
-		self.channels_hidden     = stream.read(CHANNELS)
-		self.channels_collapsed  = stream.read(CHANNELS)
-		self.channel_names = []
-		for i in range(CHANNELS):
-			self.channel_names.append(read_string(stream))
-		self.short_channel_names = []
-		for i in range(CHANNELS):
-			self.short_channel_names.append(read_string(stream))
-
-	def convert_to_tad(self):
+	def convert_to_tad(self, impulse_tracker = False):
 		out = ""
 
-		if song.name:
-			out += "#Title %s\n" % song.name
-		if song.author:
-			out += "#Composer %s\n" % song.author
+		if hasattr(self, 'name') and self.name:
+			out += "#Title %s\n" % self.name
+		if hasattr(self, 'author') and self.author:
+			out += "#Composer %s\n" % self.author
 
-		groove_mode = len(song.speed_pattern) > 1
+		groove_mode = len(self.speed_pattern) > 1
 		multiple_groove_patterns = self.furnace_file.groove_patterns != []
 
+		# Convert the speed/tempo to TAD ticks
 		if groove_mode:
 			tad_timer_value, tad_ticks_per_row = find_timer_and_multipliers_for_speed_pattern(self.ticks_per_second, self.speed_pattern)
 		else:
@@ -951,18 +927,23 @@ class FurnaceSong(object):
 		speed_at_each_row = []
 		loop_point = 0
 
+		# State for keeping track of the orders
 		order_index = 0  # Order row
 		row_index = 0    # Pattern row
 		speed_pattern_index = 0
 		new_order = True
-		current_ticks_per_second = song.ticks_per_second
-		current_speed_pattern = song.speed_pattern
+		current_ticks_per_second = self.ticks_per_second
+		current_speed_pattern = self.speed_pattern
 		need_to_remake_tad_ticks_per_row = False
 
+		# Impulse tracker state
+		previous_row_effects = [set() for _ in range(CHANNELS)]
+		it_effect_memory = [{} for _ in range(CHANNELS)]
+
 		stop_order_processing = False
-		while order_index < song.orders_length:
+		while order_index < self.orders_length:
 			if new_order:
-				channel_patterns = [song.patterns[channel][song.orders[channel][order_index]] for channel in range(CHANNELS)]
+				channel_patterns = [self.patterns[channel][self.orders[channel][order_index]] for channel in range(CHANNELS)]
 				combined_pattern_offset_for_order_row.append(len(combined_patterns[0].rows))
 				new_order = False
 
@@ -971,7 +952,11 @@ class FurnaceSong(object):
 			for channel in range(CHANNELS):
 				note = channel_patterns[channel].rows[row_index]
 				combined_patterns[channel].rows.append(note)
-				for effect_type, effect_value in note.effects:
+
+				this_row_effects = set()
+				for effect_index, effect_data in enumerate(note.effects):
+					effect_type, effect_value = effect_data
+					this_row_effects.add(effect_type)
 					if effect_type == 0x0D: # Jump to next pattern
 						order_index += 1
 						next_row_index = effect_value
@@ -997,12 +982,32 @@ class FurnaceSong(object):
 							current_speed_pattern[0] = effect_value
 							need_to_remake_tad_ticks_per_row = True
 					elif effect_type == 0x0F: # Set ticks-per-row (speed 2)
-						if not multiple_groove_patterns and song.speed_pattern[-1] != effect_value:
-							song.speed_pattern[-1] = effect_value
+						if not multiple_groove_patterns and self.speed_pattern[-1] != effect_value:
+							self.speed_pattern[-1] = effect_value
 							need_to_remake_tad_ticks_per_row = True
 					elif effect_type == 0xF0: # Set BPM
 						current_ticks_per_second = effect_value / 2.5
 						need_to_remake_tad_ticks_per_row = True
+					elif impulse_tracker and effect_type in EFFECTS_WITH_IT_CONTINUE:
+						if effect_value == it_effect_memory[channel].get(effect_type, None) and effect_type in previous_row_effects:
+							note.effects[effect_index] = (None, None)
+						elif effect_value == 0: # If the "continue" is a "restart effect", put the effect
+							if effect_type not in previous_row_effects:
+								effect_value = it_effect_memory[channel].get(effect_type, 0)
+								note.effects[effect_index] = (effect_type, effect_value)
+							else: # If the "continue" really is a continue, remove it
+								note.effects[effect_index] = (None, None)
+					it_effect_memory[channel][effect_type] = effect_value
+
+				if impulse_tracker and previous_row_effects[channel]:
+					for effect_type in previous_row_effects[channel]:
+						if effect_type in EFFECTS_WITH_IT_AUTO_CANCEL and effect_type not in this_row_effects:
+							this_effect_category = EFFECT_CATEGORY[effect_type]
+							if not any(EFFECT_CATEGORY[_] == this_effect_category for _ in this_row_effects):
+								note.effects.append(IT_EFFECT_CANCEL_OVERRIDE.get(effect_type, (effect_type, 0)) )
+
+				previous_row_effects[channel] = this_row_effects
+
 			if need_to_remake_tad_ticks_per_row:
 				if groove_mode:
 					tad_timer_value, tad_ticks_per_row = find_timer_and_multipliers_for_speed_pattern(self.ticks_per_second, current_speed_pattern)
@@ -1016,7 +1021,7 @@ class FurnaceSong(object):
 				break
 			# Onto the next row, and potentially the next order row
 			row_index = next_row_index
-			if row_index >= song.pattern_length:
+			if row_index >= len(channel_patterns[0].rows): # Assume all channels' patterns are the same size as the first one
 				row_index = 0
 				order_index += 1
 				new_order = True
@@ -1033,6 +1038,40 @@ class FurnaceSong(object):
 			if any(not _.startswith("w%") and _ != "L" for _ in v): # Sequence must not consist entirely of waits
 				out += k + " " + " ".join([_ for _ in v if _]).replace("%0 r%", "%") + "\n"
 		return out
+
+class FurnaceSong(TrackerSong):
+	def __init__(self, furnace_file, stream):
+		super().__init__()
+		self.furnace_file = furnace_file
+		furnace_file.songs.append(self)
+
+		# Parse the data at the start; this is common to both INFO and SONG
+		self.time_base = bytes_to_int(stream.read(1))
+		self.speed1 = bytes_to_int(stream.read(1))
+		self.speed2 = bytes_to_int(stream.read(1))
+		self.initial_arpeggio_time = bytes_to_int(stream.read(1))
+		self.ticks_per_second = bytes_to_float(stream.read(4))
+		self.pattern_length = bytes_to_int(stream.read(2))
+		self.orders_length = bytes_to_int(stream.read(2))
+		self.highlight_A = bytes_to_int(stream.read(1))
+		self.highlight_B = bytes_to_int(stream.read(1))
+
+	def read_orders(self, stream):
+		self.orders              = []
+		for i in range(CHANNELS):
+			column = []
+			for j in range(self.orders_length):
+				column.append(bytes_to_int(stream.read(1)))
+			self.orders.append(column)
+		self.effect_column_count = stream.read(CHANNELS)
+		self.channels_hidden     = stream.read(CHANNELS)
+		self.channels_collapsed  = stream.read(CHANNELS)
+		self.channel_names = []
+		for i in range(CHANNELS):
+			self.channel_names.append(read_string(stream))
+		self.short_channel_names = []
+		for i in range(CHANNELS):
+			self.short_channel_names.append(read_string(stream))
 
 class FurnaceFile(object):
 	def __init__(self, filename):
@@ -1079,11 +1118,9 @@ parser.add_argument('--ignore-arp-macro', action='store_true')
 parser.add_argument('--disable-loop-compression', action='store_true')
 parser.add_argument('--disable-sub-compression', action='store_true')
 args = parser.parse_args()
-
 auto_timer_mode = (args.auto_timer_mode or "low_error").lower()
 if auto_timer_mode not in ("low_error", "lowest_error"):
 	sys.exit("Invalid --auto-timer-mode setting:" % auto_timer_mode)
-
 if args.timer_override != None:
 	for timer_override_string in args.timer_override:
 		timer_override_split = timer_override_string.split("=")
@@ -1102,7 +1139,8 @@ if args.timer_override != None:
 		
 		cached_timer_and_multiplier[(furnace_tempo/2.5, furnace_speed)] = (tad_rate, tad_ticks)
 
-f = FurnaceFile(args.filename)
-for song in f.songs:
-	print(song.convert_to_tad())
-	print()
+if __name__ == "__main__":
+	f = FurnaceFile(args.filename)
+	for song in f.songs:
+		print(song.convert_to_tad())
+		print()
