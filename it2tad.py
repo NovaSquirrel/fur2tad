@@ -93,7 +93,7 @@ class ImpulseTrackerFile(object):
 		orders = []
 		for i in range(order_count):
 			o = bytes_to_int(s.read(1))
-			if o < 254: # 254 is seperator and 255 is song end
+			if o < 254: # 254 is separator and 255 is song end
 				orders.append(o)
 
 		instrument_offsets = []
@@ -188,6 +188,8 @@ class ImpulseTrackerFile(object):
 		# Song data
 		###################################################
 		for pattern_number in range(pattern_count):
+			if pattern_offsets[pattern_number] == 0: # Unused pattern
+				continue
 			s.seek(pattern_offsets[pattern_number]) # Start reading from pattern
 			packed_pattern_length = bytes_to_int(s.read(2))
 			row_count = bytes_to_int(s.read(2))
@@ -358,14 +360,15 @@ class ImpulseTrackerFile(object):
 							note.it_effect = (effect_char, effect_value)
 
 					# Write the note
-					channel_patterns[channel].rows[row_number] = note
+					if channel <= CHANNELS:
+						channel_patterns[channel].rows[row_number] = note
 
 		if use_instruments:
 			self.instruments = instruments
 		else:
 			self.instruments = samples
 
-		print(song.patterns[0][0].rows)
+		#print(song.patterns[0][0].rows)
 
 f = ImpulseTrackerFile(args.filename)
 print(f.song.convert_to_tad(impulse_tracker = True))

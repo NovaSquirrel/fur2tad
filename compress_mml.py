@@ -102,7 +102,8 @@ def replace_with_loops(input):
 				put_colon_at += 1
 			if put_colon_at > 0:
 				tokens_before_colon = out[this_loop_inserted_at : this_loop_inserted_at + put_colon_at]
-				if any(not _.startswith("MP") for _ in tokens_before_colon):
+				tokens_after_colon = out[-len(this_loop_data)+put_colon_at : ]
+				if any(not _.startswith("MP") and not _.startswith("@") for _ in tokens_before_colon) and any(not _.startswith("MP") and not _.startswith("@") for _ in tokens_after_colon):
 					out.insert(this_loop_inserted_at + put_colon_at, ":")
 					best_loop_repeats += 1
 					start_loop_index += put_colon_at
