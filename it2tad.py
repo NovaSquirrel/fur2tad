@@ -296,9 +296,9 @@ class ImpulseTrackerFile(object):
 							if effect_value == 0 or (effect_value & 0xF0) == 0 or (effect_value & 0x0F) == 0:
 								note.effects.append((0x0A, effect_value))
 								# TODO: Figure out if it actually goes up or down at the same rate as Furnace
-							elif (effect_value & 0xF0) == 0xF: # Fine decrease
+							elif (effect_value & 0xF0) == 0xF0: # Fine decrease
 								note.effects.append((0xF9, effect_value & 15))
-							elif (effect_value & 0x0F) == 0xF: # Fine increase
+							elif (effect_value & 0x0F) == 0x0F: # Fine increase
 								note.effects.append((0xF8, effect_value >> 4))
 							else:
 								print("Invalid volume slide %x" % effect_value)
