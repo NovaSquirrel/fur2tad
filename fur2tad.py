@@ -1152,6 +1152,8 @@ parser.add_argument('--ignore-arp-macro', action='store_true')
 parser.add_argument('--disable-loop-compression', action='store_true')
 parser.add_argument('--disable-sub-compression', action='store_true')
 parser.add_argument('--remove-instrument-names', action='store_true')
+parser.add_argument('--project-folder', type=str)
+parser.add_argument('--dump-samples', type=str)
 args = parser.parse_args()
 auto_timer_mode = (args.auto_timer_mode or "low_error").lower()
 if auto_timer_mode not in ("low_error", "lowest_error"):

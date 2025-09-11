@@ -22,7 +22,8 @@
 
 # https://modland.com/pub/documents/format_documentation/Impulse%20Tracker%20v2.04%20(.it).html
 # https://fileformats.fandom.com/wiki/Impulse_tracker
-import io
+import io, os, json, glob
+import xmodits # pip install xmodits-py
 from fur2tad import *
 
 IT_EFFECT_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#\\" # 0x01 through 0x1C
@@ -113,7 +114,7 @@ class ImpulseTrackerFile(object):
 		###################################################
 
 		song = TrackerSong()
-		song.name = song_name
+		song.name = song_name.replace(" ", "_").replace(chr(0), "")
 		song.speed_pattern = [initial_speed]
 		song.speed1 = initial_speed
 		song.ticks_per_second = initial_tempo / 2.5
@@ -123,6 +124,49 @@ class ImpulseTrackerFile(object):
 		song.orders_length = len(orders)
 		song.furnace_file = self
 		self.song = song
+
+		###################################################
+		# Samples
+		###################################################
+		samples = []
+		for sample_number in range(sample_count):
+			sample = ImpulseTrackerSample()
+			s.seek(sample_offsets[sample_number])
+			magic = s.read(4)
+			sample.dos_filename = s.read(12)
+			s.read(1) # Reserved
+			sample.global_volume  = bytes_to_int(s.read(1))
+			sample.flags          = bytes_to_int(s.read(1))
+			sample.flags_is_16bit     = bool(sample.flags & 2)
+			sample.flags_compressed   = bool(sample.flags & 8)
+			sample.flags_looped       = bool(sample.flags & 16)
+			sample.flags_sustain_loop = bool(sample.flags & 32)
+
+			sample.default_volume = bytes_to_int(s.read(1))
+			sample.name           = s.read(26).decode().replace(" ", "_").replace(chr(0), "")
+			if args.remove_instrument_names:
+				sample.name = "sample%d" % sample_number
+			sample.convert_flags  = bytes_to_int(s.read(1))
+			sample.data_is_signed     = bool(sample.convert_flags & 1)
+			sample.data_is_big_endian = bool(sample.convert_flags & 2)
+			sample.data_is_delta_encoded = bool(sample.convert_flags & 4)
+			sample.data_is_byte_delta_encoded = bool(sample.convert_flags & 8)
+			sample.prompt_left_right_all_stereo = bool(sample.convert_flags & 16)
+
+			sample.default_pan    = bytes_to_int(s.read(1))
+			sample.sample_length  = bytes_to_int(s.read(4))
+			sample.loop_beginning = bytes_to_int(s.read(4))
+			sample.loop_end       = bytes_to_int(s.read(4))
+			sample.c5_rate        = bytes_to_int(s.read(4))
+			sample.sustain_beginning = bytes_to_int(s.read(4))
+			sample.sustain_end    = bytes_to_int(s.read(4))
+			sample.sample_pointer = bytes_to_int(s.read(4))
+			sample.vibrato_speed  = bytes_to_int(s.read(1))
+			sample.vibrato_depth  = bytes_to_int(s.read(1))
+			sample.vibrato_sweep  = bytes_to_int(s.read(1))
+			sample.vibrato_waveform = bytes_to_int(s.read(1))
+			samples.append(sample)
+		self.it_samples = samples
 
 		###################################################
 		# Instruments
@@ -147,42 +191,17 @@ class ImpulseTrackerFile(object):
 			instrument.tracker_version = bytes_to_int(s.read(2))
 			instrument.sample_count = bytes_to_int(s.read(1))
 			s.read(1) # Reserved
-			instrument.name = s.read(26).decode()
+			instrument.name = s.read(26).decode().replace(" ", "_").replace(chr(0), "")
 			if args.remove_instrument_names:
 				instrument.name = "instrument%d" % instrument_number
-			# Ignore the rest for now
-			instruments.append(instrument)
+			s.read(6) # Skip ahead
 
-		###################################################
-		# Samples
-		###################################################
-		samples = []
-		for sample_number in range(sample_count):
-			sample = ImpulseTrackerSample()
-			s.seek(sample_offsets[sample_number])
-			magic = s.read(4)
-			sample.dos_filename = s.read(12)
-			s.read(1) # Reserved
-			sample.global_volume  = bytes_to_int(s.read(1))
-			sample.flags          = bytes_to_int(s.read(1))
-			sample.default_volume = bytes_to_int(s.read(1))
-			sample.name           = s.read(26).decode()
-			if args.remove_instrument_names:
-				sample.name = "sample%d" % sample_number
-			sample.convert_flags  = bytes_to_int(s.read(1))
-			sample.default_pan    = bytes_to_int(s.read(1))
-			sample.sample_length  = bytes_to_int(s.read(4))
-			sample.loop_beginning = bytes_to_int(s.read(4))
-			sample.loop_end       = bytes_to_int(s.read(4))
-			sample.c5_rate        = bytes_to_int(s.read(4))
-			sample.sustain_beginning = bytes_to_int(s.read(4))
-			sample.sustain_end    = bytes_to_int(s.read(4))
-			sample.sample_pointer = bytes_to_int(s.read(4))
-			sample.vibrato_speed  = bytes_to_int(s.read(1))
-			sample.vibrato_depth  = bytes_to_int(s.read(1))
-			sample.vibrato_sweep  = bytes_to_int(s.read(1))
-			sample.vibrato_waveform = bytes_to_int(s.read(1))
-			samples.append(sample)
+			sample_map = s.read(240)
+			instrument.sample_number = int(sample_map[1]) - 1
+			instrument.sample = samples[instrument.sample_number]
+
+			instruments.append(instrument)
+		self.it_instruments = instruments
 
 		###################################################
 		# Song data
@@ -370,5 +389,76 @@ class ImpulseTrackerFile(object):
 
 		#print(song.patterns[0][0].rows)
 
-f = ImpulseTrackerFile(args.filename)
-print(f.song.convert_to_tad(impulse_tracker = True))
+it_file = ImpulseTrackerFile(args.filename)
+if args.dump_samples:
+	os.makedirs(args.dump_samples, exist_ok=True)
+	xmodits.dump(args.filename, args.dump_samples, index_raw=True)
+if args.project_folder:
+	os.makedirs(args.project_folder, exist_ok=True)
+
+	mml_path = os.path.join(args.project_folder, "song.mml")
+	mml_text = it_file.song.convert_to_tad(impulse_tracker = True)
+	with open(mml_path, 'w') as f:
+		f.write(mml_text)
+
+	terrificaudio_path = os.path.join(args.project_folder, "project.terrificaudio")
+	project = {
+		"_about": {
+			"file_type": "Terrific Audio Driver project file",
+			"version": "0.1.1"
+		},
+		"instruments": [],
+		"samples": [],
+		"default_sfx_flags": {"one_channel": True, "interruptible": True},
+		"high_priority_sound_effects": [],
+		"sound_effects": [],
+		"low_priority_sound_effects": [],
+		"sound_effect_file": "sound-effects.txt",
+		"songs": [{"name": it_file.song.name, "source": "song.mml"}]
+	}
+
+	# Write the instruments
+	wavs = glob.glob(os.path.join(args.project_folder, '*.wav'))
+	for instrument in it_file.song.instruments_used:
+		it_instrument = it_file.instruments[instrument]
+		look_for = "%.2d - " % (instrument+1)
+
+		for filename in wavs:
+			wav_basename = os.path.basename(filename)
+			if wav_basename.startswith(look_for):
+				sample = it_instrument if isinstance(it_instrument, ImpulseTrackerSample) else it_instrument.sample
+				c5_rate = sample.c5_rate
+
+				bytes_per_sample_point = 2 if sample.flags_is_16bit else 1
+				c5_freq = 261.626
+				wavelength = (c5_rate / bytes_per_sample_point) / c5_freq
+				tuning_freq = 32000 / wavelength
+				print(bytes_per_sample_point, wavelength, tuning_freq)
+
+				instrument_entry = {
+					"name": it_instrument.name,
+					"source": wav_basename,
+					"freq": tuning_freq,
+					"loop": "loop_with_filter" if sample.flags_looped else "none",
+					"first_octave": 1,
+					"last_octave": 6,
+					"envelope": "gain F127",
+				}
+				if sample.flags_looped:
+					instrument_entry["loop_setting"] = 0
+				project["instruments"].append(instrument_entry)
+				break
+		else:
+			print("Can't find file for instrument %d (%s)" % (instrument+1, it_instrument.name))
+
+	# Write the final project file
+	with open(terrificaudio_path, 'w') as f:
+		json.dump(project, f, indent=2)
+
+	sfx_path = os.path.join(args.project_folder, "sound-effects.txt")
+	if not os.path.exists(sfx_path):
+		f = open(sfx_path, "w")
+		f.close()
+
+if not args.project_folder:
+	print(it_file.song.convert_to_tad(impulse_tracker = True))
