@@ -439,13 +439,16 @@ if args.project_folder:
 				wavelength = (c5_rate / bytes_per_sample_point) / c5_freq
 				tuning_freq = 32000 / wavelength
 
+				first_note = instrument.lowest_used_note if hasattr(instrument, "lowest_used_note") else 12*(5+args.default_instrument_first_octave)
+				last_note  = instrument.highest_used_note  if hasattr(instrument, "highest_used_note") else 12*(5+args.default_instrument_last_octave)+11
+
 				instrument_entry = {
 					"name": it_instrument.name,
 					"source": wav_basename,
 					"freq": tuning_freq,
 					"loop": "loop_with_filter" if sample.flags_looped else "none",
-					"first_octave": 1,
-					"last_octave": 6,
+					"first_octave": first_note // 12 - 5,
+					"last_octave": last_note // 12 - 5,
 					"envelope": "gain F127",
 				}
 				if sample.flags_looped:

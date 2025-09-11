@@ -35,8 +35,8 @@ class NoteValue(IntEnum):
 	OFF = 180
 	RELEASE = 181
 	MACRO_RELEASE = 182
-	FIRST_VALID_TAD = 12*5
-	LAST_VALID_TAD = 12*(5 + 6) + 11
+	FIRST_VALID_TAD = 12*5 # Octave 0
+	LAST_VALID_TAD = 12*(5 + 7) + 11 # Octave 7
 
 EFFECT_CATEGORY = {
 	0x0A: "volume", 0xD3: "volume", 0xD4: "volume", 0xF3: "volume", 0xF4: "volume", 0xF8: "volume", 0xF9: "volume", 0xFA: "volume",
@@ -509,6 +509,25 @@ class FurnacePattern(object):
 		out = []
 
 		# Utilities
+		def record_note_as_used(note):
+			if current_instrument == None or note < NoteValue.FIRST or note > NoteValue.LAST:
+				return
+			instrument = song.furnace_file.instruments[current_instrument]
+			note += semitone_offset
+			if not hasattr(instrument, "instrument_is_used"):
+				instrument.instrument_is_used = True
+			if not hasattr(instrument, "lowest_used_note"):
+				instrument.lowest_used_note = note
+			if note < instrument.lowest_used_note:
+				instrument.lowest_used_note = note
+			if not hasattr(instrument, "highest_used_note"):
+				instrument.highest_used_note = note
+			if note > instrument.highest_used_note:
+				instrument.highest_used_note = note
+			if not hasattr(instrument, "all_used_notes"):
+				instrument.all_used_notes = set()
+			instrument.all_used_notes.add(note)
+
 		def apply_legato():
 			if out[-1].startswith("r"): # Rest
 				out[-1] = "w" + out[-1][1:] # If there's a rest before this, turn it into a wait
@@ -824,6 +843,8 @@ class FurnacePattern(object):
 					leftover_tad_ticks = duration_in_tad_ticks - slide_tad_ticks
 					note_start_name = note_name_from_index(portamento_from, semitone_offset)
 					note_stop_name = note_name_from_index(portamento_target, semitone_offset)
+					record_note_as_used(portamento_from)
+					record_note_as_used(portamento_target)
 
 					if slide_tad_ticks <= 0 or portamento_from == portamento_target: # If it's a zero tick portamento then just do the target note
 						out.append("%s%%%d" % (note_stop_name, duration_in_tad_ticks))
@@ -850,6 +871,8 @@ class FurnacePattern(object):
 
 					note_start_name = note_name_from_index(portamento_from, semitone_offset)
 					note_stop_name = note_name_from_index(ending_note, semitone_offset)
+					record_note_as_used(portamento_from)
+					record_note_as_used(ending_note)
 					most_recent_note = ending_note
 
 					if portamento_from == ending_note:
@@ -866,6 +889,8 @@ class FurnacePattern(object):
 				ending_note = min(NoteValue.LAST_VALID_TAD, max(NoteValue.FIRST_VALID_TAD, starting_note + total_slide_amount))
 				note_start_name = note_name_from_index(starting_note, semitone_offset)
 				note_stop_name = note_name_from_index(ending_note, semitone_offset)
+				record_note_as_used(starting_note)
+				record_note_as_used(ending_note)
 				most_recent_note = ending_note
 
 				if starting_note == ending_note:
@@ -877,8 +902,11 @@ class FurnacePattern(object):
 			elif note.note != None and note.note >= NoteValue.FIRST and note.note <= NoteValue.LAST:
 				if legato:
 					apply_legato()
+				record_note_as_used(note.note)
 				if arpeggio_enabled:
 					out.append("{{%s %s %s}}%%%d,%%%d" % (note_name_from_index(note.note, semitone_offset), note_name_from_index(note.note + arpeggio_note1, semitone_offset), note_name_from_index(note.note + arpeggio_note2, semitone_offset), duration_in_tad_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / furnace_ticks_per_row))) ))
+					record_note_as_used(note.note + arpeggio_note1)
+					record_note_as_used(note.note + arpeggio_note2)
 				else:
 					if noise_mode:
 						note_name = "N%d," % noise_frequency
@@ -1155,6 +1183,9 @@ parser.add_argument('--ignore-arp-macro', action='store_true')
 parser.add_argument('--disable-loop-compression', action='store_true')
 parser.add_argument('--disable-sub-compression', action='store_true')
 parser.add_argument('--remove-instrument-names', action='store_true')
+parser.add_argument('--keep-all-instruments', action='store_true')
+parser.add_argument('--default-instrument-first-octave', default=1, type=int)
+parser.add_argument('--default-instrument-last-octave', default=6, type=int)
 parser.add_argument('--project-folder', type=str)
 parser.add_argument('--dump-samples', type=str)
 args = parser.parse_args()
@@ -1225,6 +1256,8 @@ if __name__ == "__main__":
 		# Write the instruments
 		brrs = glob.glob(os.path.join(args.project_folder, '*.brr'))
 		for i, instrument in enumerate(fur_file.instruments):
+			if not args.keep_all_instruments and (not hasattr(instrument, "instrument_is_used") or not instrument.instrument_is_used):
+				continue
 			look_for = "%.2d - " % (instrument.initial_sample)
 			sample = fur_file.samples[instrument.initial_sample]
 
@@ -1235,13 +1268,16 @@ if __name__ == "__main__":
 					wavelength = sample.c4_rate / c5_freq
 					tuning_freq = 32000 / wavelength
 
+					first_note = instrument.lowest_used_note if hasattr(instrument, "lowest_used_note") else 12*(5+args.default_instrument_first_octave)
+					last_note  = instrument.highest_used_note  if hasattr(instrument, "highest_used_note") else 12*(5+args.default_instrument_last_octave)+11
+
 					instrument_entry = {
 						"name": instrument.name,
 						"source": brr_basename,
 						"freq": tuning_freq,
 						"loop": "override_brr_loop_point" if sample.loop_start != -1 else "none",
-						"first_octave": 1,
-						"last_octave": 6,
+						"first_octave": first_note // 12 - 5,
+						"last_octave": last_note // 12 - 5,
 						"envelope": "gain F127",
 					}
 
