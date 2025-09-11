@@ -42,3 +42,49 @@ Some Furnace features that are not supported:
 * Wavetable
 * Sample map
 * Pitch and volume slides that would take more than 256 TAD timer ticks - Could be implemented by breaking the slide into parts
+
+# Command line arguments
+* `--auto-timer-mode low_error/lowest_error`: Choose a strategy for automatically choosing TAD timer values from Furnace speeds and tempos.
+* `--timer-override bpm,speed=ticks bpm,speed=ticks bpm,speed=ticks`: Allows overriding the automatic Furnace speed conversions by providing your own timer values.
+* `--ignore-arp-macro`: Do not use the arpeggio macros on instruments to determine the semitone offset.
+* `--disable-loop-compression`: Do not attempt to compress the MML with loops.
+* `--disable-sub-compression`: Do not attempt to compress the MML with subroutines.
+* `--remove-instrument-names`: Rename all instruments to have a number instead of using the instrument's stored name.
+
+`fur2tad` can set up a Terrific Audio Driver project file for you, and can dump samples. Samples must be in BRR format in Furnace when using either of these features.
+* `--project-folder foldername`: Dump all of the samples to the folder, create .mml files for all of the included songs, and create a Terrific Audio Driver project file.
+* `--dump-samples foldername`: Dump all of the samples to the folder as BRR files. These files are prefixed with the loop point if the sample is looped.
+* `--keep-all-instruments`: Include all instruments in the project file, even if they aren't used in any of the songs.
+* `--default-instrument-first-octave 0-7`: If using `--keep-all-instruments`, use this as the `first_octave` on instruments that weren't used.
+* `--default-instrument-last-octave 0-7`: If using `--keep-all-instruments`, use this as the `last_octave` on instruments that weren't used.
+
+# Impulse Tracker module support
+An `it2tad.py` is provided, which can run Impulse Tracker music through the same conversion logic. `xmodits` is required and is used to extract samples from the file; `pip install xmodits-py` can be used to install it. The converter will use the single song contained in the `.it` file and multiple songs are not supported yet. `it2tad` will not fix your samples for you; the sample file length must be a multiple of 16 samples.
+
+Impulse Tracker effects are converted into Furnace effects; not all Furnace effects are currently supported, and there may be mistakes.
+* Volume effects become normal `D`, `E`, `F`, `G`, `H`, `X` effects
+* `A` --> `09` (Speed)
+* `B` --> `0B` (Switch pattern - cannot be used on the same row as `C` yet)
+* `C` --> `0D` (Pattern break - cannot be used on the same row as `B` yet)
+* `D` --> `0A` or `F8` or `F9` (Volume slide)
+* `E` --> `02` or `F2` (Portamento down)
+* `F` --> `01` or `F1` (Portamento up)
+* `G` --> `03` (Portamento)
+* `H` --> `04` (Vibrato)
+* `J` --> `00` (Arpeggio)
+* `K` --> `0A` or `F8` or `F9` plus `04` (Volume slide plus vibrato)
+* `L` --> `0A` or `F8` or `F9` plus `03` (Volume slide plus portamento)
+* `P` --> `83` (Pan slide; fine pan not supported yet)
+* `R` --> `07` (Tremolo) - not supported by MML converter yet
+* `S8x` --> `80` (Pan)
+* `SCx` --> `EC` (Delayed note cut) - not supported by MML converter yet
+* `SDx` --> `ED` (Delayed note start) - not supported by MML converter yet
+* `T` --> `F0` (Change tempo; T0x and T1x unsupported)
+* `X` --> `80` (Pan)
+* `Y` --> `84` (Panbrello) - not supported by MML converter yet
+
+Some Impules Tracker features that are not supported:
+* New note actions
+* Sample map
+* Instrument loop points that are not at the start of the sample (could be added later)
+* Instrument envelopes (instruments will use `gain F127`)
