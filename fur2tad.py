@@ -1212,10 +1212,11 @@ if args.timer_override != None:
 
 if __name__ == "__main__":
 	fur_file = FurnaceFile(args.filename)
-	if args.dump_samples:
-		os.makedirs(args.dump_samples, exist_ok=True)
+	dump_folder = args.dump_samples or args.project_folder
+	if dump_folder:
+		os.makedirs(dump_folder, exist_ok=True)
 		for i, sample in enumerate(fur_file.samples):
-			brr_path = os.path.join(args.dump_samples, "%.2d - %s.brr" % (i, sample.name))
+			brr_path = os.path.join(dump_folder, "%.2d - %s.brr" % (i, sample.name))
 			assert sample.is_brr
 
 			# Seems that Furnace can create BRR files that don't have the last block set correctly
@@ -1223,6 +1224,8 @@ if __name__ == "__main__":
 			sample.data[-9] |= 1 # End marker
 			if sample.loop_start != -1:
 				sample.data[-9] |= 2 # Loop marker
+				brr_loop_start = sample.loop_start // 16 * 9
+				sample.data = bytes((brr_loop_start & 255, (brr_loop_start >> 8) & 255)) + sample.data # Add loop point to BRR file
 
 			with open(brr_path, 'wb') as f:
 				f.write(sample.data)
