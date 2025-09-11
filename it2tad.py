@@ -73,7 +73,7 @@ class ImpulseTrackerFile(object):
 		
 		flags = bytes_to_int(s.read(2))
 		special = bytes_to_int(s.read(2))
-		use_instruments = bool(flags & 4)
+		self.use_instruments = bool(flags & 4)
 
 		global_volume = bytes_to_int(s.read(1))
 		mix_volume = bytes_to_int(s.read(1))
@@ -382,7 +382,7 @@ class ImpulseTrackerFile(object):
 					if channel <= CHANNELS:
 						channel_patterns[channel].rows[row_number] = note
 
-		if use_instruments:
+		if self.use_instruments:
 			self.instruments = instruments
 		else:
 			self.instruments = samples
@@ -421,12 +421,17 @@ if args.project_folder:
 	wavs = glob.glob(os.path.join(args.project_folder, '*.wav'))
 	for instrument in it_file.song.instruments_used:
 		it_instrument = it_file.instruments[instrument]
-		look_for = "%.2d - " % (instrument+1)
+
+		if it_file.use_instruments:
+			look_for = "%.2d - " % (it_instrument.sample_number+1)
+			sample = it_instrument.sample
+		else:
+			look_for = "%.2d - " % (instrument+1)
+			sample = it_instrument
 
 		for filename in wavs:
 			wav_basename = os.path.basename(filename)
 			if wav_basename.startswith(look_for):
-				sample = it_instrument if isinstance(it_instrument, ImpulseTrackerSample) else it_instrument.sample
 				c5_rate = sample.c5_rate
 
 				bytes_per_sample_point = 2 if sample.flags_is_16bit else 1
