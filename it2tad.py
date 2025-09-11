@@ -433,7 +433,6 @@ if args.project_folder:
 				c5_freq = 261.626
 				wavelength = (c5_rate / bytes_per_sample_point) / c5_freq
 				tuning_freq = 32000 / wavelength
-				print(bytes_per_sample_point, wavelength, tuning_freq)
 
 				instrument_entry = {
 					"name": it_instrument.name,
