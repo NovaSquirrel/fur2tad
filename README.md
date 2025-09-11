@@ -61,6 +61,8 @@ Some Furnace features that are not supported:
 # Impulse Tracker module support
 An `it2tad.py` is provided, which can run Impulse Tracker music through the same conversion logic. `xmodits` is required and is used to extract samples from the file; `pip install xmodits-py` can be used to install it. The converter will use the single song contained in the `.it` file and multiple songs are not supported yet. `it2tad` will not fix your samples for you; the sample file length must be a multiple of 16 samples.
 
+Caution: xmodits seems to throw an error when the wav files it's attempting to create already exist, so this tool will remove all wav files in the output directory whose name starts with two digits, a space, and a hyphen.
+
 Impulse Tracker effects are converted into Furnace effects; not all Furnace effects are currently supported, and there may be mistakes.
 * Volume effects become normal `D`, `E`, `F`, `G`, `H`, `X` effects
 * `A` --> `09` (Speed)

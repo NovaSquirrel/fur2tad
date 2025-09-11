@@ -390,9 +390,18 @@ class ImpulseTrackerFile(object):
 		#print(song.patterns[0][0].rows)
 
 it_file = ImpulseTrackerFile(args.filename)
-if args.dump_samples:
-	os.makedirs(args.dump_samples, exist_ok=True)
-	xmodits.dump(args.filename, args.dump_samples, index_raw=True)
+
+dump_folder = args.dump_samples or args.project_folder
+if dump_folder:
+	os.makedirs(dump_folder, exist_ok=True)
+
+	wavs = glob.glob(os.path.join(dump_folder, '*.wav'))
+	for filename in wavs:
+		wav_basename = os.path.basename(filename)
+		if len(wav_basename) > 4 and wav_basename[0:2].isdigit() and wav_basename[2] == " " and wav_basename[3] == "-":
+			os.remove(filename)
+
+	xmodits.dump(args.filename, dump_folder, index_raw=True)
 if args.project_folder:
 	os.makedirs(args.project_folder, exist_ok=True)
 
