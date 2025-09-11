@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 # https://github.com/tildearrow/furnace/blob/master/papers/format.md
-import zlib, io, struct, math, argparse, sys
+import zlib, io, struct, math, argparse, sys, os, glob, json
 from compress_mml import compress_mml
 from enum import IntEnum
 CHANNELS = 8
@@ -185,7 +185,7 @@ def FurnaceInfoBlock(furnace_file, name, data, s):
 	chip_volumes = s.read(32)
 	chip_panning = s.read(32)
 	chip_flag_pointers = s.read(128)
-	song.name = read_string(s)
+	song.name = read_string(s).replace("/", "-").replace("\\", "-")
 	song.author = read_string(s)
 	furnace_file.a4_tuning = bytes_to_float(s.read(4))
 
@@ -285,7 +285,7 @@ def FurnaceSubsongBlock(furnace_file, name, data, s):
 	song = FurnaceSong(furnace_file, s)
 	song.virtual_tempo_numerator   = bytes_to_int(s.read(2))
 	song.virtual_tempo_denominator = bytes_to_int(s.read(2))
-	song.name    = read_string(s)
+	song.name    = read_string(s).replace("/", "-").replace("\\", "-")
 	song.comment = read_string(s)
 	song.read_orders(s)
 
@@ -303,7 +303,7 @@ def FurnaceSampleBlock(furnace_file, name, data, s):
 	sample = FurnaceSample()
 	furnace_file.samples.append(sample)
 
-	sample.name = read_string(s)
+	sample.name = read_string(s).replace("/", "-").replace("\\", "-")
 	sample.length             = bytes_to_int(s.read(4))
 	sample.compatibility_rate = bytes_to_int(s.read(4))
 	sample.c4_rate            = bytes_to_int(s.read(4)) # In Hz
@@ -313,7 +313,12 @@ def FurnaceSampleBlock(furnace_file, name, data, s):
 	sample.flags2             = bytes_to_int(s.read(1))
 	sample.loop_start         = bytes_to_int(s.read(4), signed=True)
 	sample.loop_end           = bytes_to_int(s.read(4), signed=True)
+	s.read(16) # "sample presence bitfields"
 	sample.data               = s.read(sample.length)
+	sample.is_brr = sample.depth == 9
+
+	if not sample.is_brr:
+		print("Sample %s is not in BRR format")
 
 instrument_counter = 0
 @block_handler("INS2")
@@ -359,21 +364,19 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 			instrument.decay    = (b >> 4) & 15
 
 			b = bytes_to_int(sf.read(1)) # sustain/release
-			instrument.sustain  = b & 15
-			instrument.release  = (b >> 4) & 15 # Actually sustain rate?
+			instrument.sustain  = (b >> 5) & 7
+			instrument.release  = b & 31
 
 			b = bytes_to_int(sf.read(1)) # flags
 			instrument.gain_mode = b & 7
 			instrument.make_gain_effective = bool(b & 8)
 			instrument.envelope_on         = bool(b & 16)
 
-			instrument.gain = sf.read(1) # gain
+			instrument.gain = bytes_to_int(sf.read(1)) # gain
 
 			b = bytes_to_int(sf.read(1)) # decay 2/sustain mode
 			instrument.decay2 = b & 31
 			instrument.sustain_mode = (b >> 5) & 3
-
-			# TODO: Figure out what to do with these fields
 		elif feature == b'MA':
 			sf.read(2) # Macro data size
 			while True:
@@ -1177,7 +1180,107 @@ if args.timer_override != None:
 		cached_timer_and_multiplier[(furnace_tempo/2.5, furnace_speed)] = (tad_rate, tad_ticks)
 
 if __name__ == "__main__":
-	f = FurnaceFile(args.filename)
-	for song in f.songs:
-		print(song.convert_to_tad())
-		print()
+	fur_file = FurnaceFile(args.filename)
+	if args.dump_samples:
+		os.makedirs(args.dump_samples, exist_ok=True)
+		for i, sample in enumerate(fur_file.samples):
+			brr_path = os.path.join(args.dump_samples, "%.2d - %s.brr" % (i, sample.name))
+			assert sample.is_brr
+
+			# Seems that Furnace can create BRR files that don't have the last block set correctly
+			sample.data = bytearray(sample.data)
+			sample.data[-9] |= 1 # End marker
+			if sample.loop_start != -1:
+				sample.data[-9] |= 2 # Loop marker
+
+			with open(brr_path, 'wb') as f:
+				f.write(sample.data)
+	if args.project_folder:
+		os.makedirs(args.project_folder, exist_ok=True)
+
+		terrificaudio_path = os.path.join(args.project_folder, "project.terrificaudio")
+		project = {
+			"_about": {
+				"file_type": "Terrific Audio Driver project file",
+				"version": "0.1.1"
+			},
+			"instruments": [],
+			"samples": [],
+			"default_sfx_flags": {"one_channel": True, "interruptible": True},
+			"high_priority_sound_effects": [],
+			"sound_effects": [],
+			"low_priority_sound_effects": [],
+			"sound_effect_file": "sound-effects.txt",
+			"songs": []
+		}
+
+		for song in fur_file.songs:
+			filename = "%s.mml" % song.name
+			mml_path = os.path.join(args.project_folder, filename)
+			mml_text = song.convert_to_tad()
+			with open(mml_path, 'w') as f:
+				f.write(mml_text)
+			project["songs"].append({"name": song.name, "source": filename})
+
+		# Write the instruments
+		brrs = glob.glob(os.path.join(args.project_folder, '*.brr'))
+		for i, instrument in enumerate(fur_file.instruments):
+			look_for = "%.2d - " % (instrument.initial_sample)
+			sample = fur_file.samples[instrument.initial_sample]
+
+			for filename in brrs:
+				brr_basename = os.path.basename(filename)
+				if brr_basename.startswith(look_for):
+					c5_freq = 261.626
+					wavelength = sample.c4_rate / c5_freq
+					tuning_freq = 32000 / wavelength
+
+					instrument_entry = {
+						"name": instrument.name,
+						"source": brr_basename,
+						"freq": tuning_freq,
+						"loop": "override_brr_loop_point" if sample.loop_start != -1 else "none",
+						"first_octave": 1,
+						"last_octave": 6,
+						"envelope": "gain F127",
+					}
+
+					if hasattr(instrument, "envelope_on") and instrument.envelope_on:
+						instrument_entry["envelope"] = "adsr %d %d %d %d" % (instrument.attack, instrument.decay, instrument.sustain, instrument.release)
+					else:
+						if hasattr(instrument, "gain_mode"):
+							if instrument.gain_mode == 0: # Direct
+								instrument_entry["envelope"] = "gain F%d" % instrument.gain
+							elif instrument.gain_mode == 4: # Decreasing
+								instrument_entry["envelope"] = "gain D%d" % instrument.gain
+							elif instrument.gain_mode == 5: # Exponential decrease
+								instrument_entry["envelope"] = "gain E%d" % instrument.gain
+							elif instrument.gain_mode == 6: # Increasing
+								instrument_entry["envelope"] = "gain I%d" % instrument.gain
+							elif instrument.gain_mode == 7: # Bent
+								instrument_entry["envelope"] = "gain B%d" % instrument.gain
+							else:
+								instrument_entry["envelope"] = "gain F127"
+						else:
+							instrument_entry["envelope"] = "gain F127"
+
+					if sample.loop_start != -1:
+						instrument_entry["loop_setting"] = sample.loop_start
+					project["instruments"].append(instrument_entry)
+					break
+			else:
+				print("Can't find file for instrument %d (%s)" % (instrument, it_instrument.name))
+
+		# Write the final project file
+		with open(terrificaudio_path, 'w') as f:
+			json.dump(project, f, indent=2)
+
+		sfx_path = os.path.join(args.project_folder, "sound-effects.txt")
+		if not os.path.exists(sfx_path):
+			f = open(sfx_path, "w")
+			f.close()
+
+	if not args.project_folder:
+		for song in fur_file.songs:
+			print(song.convert_to_tad())
+			print()
