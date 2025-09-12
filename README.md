@@ -43,6 +43,19 @@ Some Furnace features that are not supported:
 * Sample map
 * Pitch and volume slides that would take more than 256 TAD timer ticks - Could be implemented by breaking the slide into parts
 
+# Terrific Audio Driver's pitch table
+Terrific Audio Driver precalculates pitches and stores them in a "pitch table" which can hold up to 256 entries and is shared across songs that share the same Common Audio Data. Each TAD instrument has a range of octaves it can use (which this converter automatically chooses based on what octaves the song data uses) and each octave takes up space in the pitch table. Instruments with the same sample rate can share data, so you can save space in the pitch table by having multiple Furnace instruments use the same sample rate. Arpeggio macros can be used to adjust the tuning of an instrument separately from the sample rate.
+
+In addition to instruments, Terrific Audio Driver has "samples" (see [the TAD documentation](https://github.com/undisbeliever/terrific-audio-driver/blob/main/docs/samples.md)) which work similarly to instruments but have a specific list of sample rates the sample can be played at, instead of using notes. This means that only the specific rates specified end up in the pitch table, not an entire octave that may not be used. This is a good option for drums and other sounds that a song only intends to play at a few different pitches.
+
+To specify that you want a Furnace instrument to turn into a TAD sample, use a sample map on the Furnace instrument, and only assign a Furnace sample to the notes that you would like to use. You can use a mix of different Furnace samples (helpful for setting up a drum kit), and the output note doesn't have to match the input note. The converter may not correctly handle using TAD samples in combination with some effects that alter pitch (such as portamento.)
+
+# Metadata in instrument names
+The converter checks for commands in each instrument's name, which will affect how the instrument is treated in the conversion process.
+
+* `!remap`: Do not change the instrument into a TAD sample; instead, treat a sample map (if provided) as a table that lists what notes to change into which other notes. The samples on each entry in the sample map are ignored.
+* `!sample`: Change the instrument into a TAD sample by looking at the song data to determine which notes (and consequently, sample rates) are needed. Will only currently work on Furnace files that contain a single song.
+
 # Command line arguments
 * `--auto-timer-mode low_error/lowest_error`: Choose a strategy for automatically choosing TAD timer values from Furnace speeds and tempos.
 * `--timer-override bpm,speed=ticks bpm,speed=ticks bpm,speed=ticks`: Allows overriding the automatic Furnace speed conversions by providing your own timer values.
