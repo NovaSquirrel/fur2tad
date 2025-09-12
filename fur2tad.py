@@ -423,9 +423,28 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 
 	# Create a TAD instrument or sample from this
 	if instrument.use_sample_map:
-		tad_sample = TerrificSample(instrument)
-		furnace_file.tad_samples.append(tad_sample)
-		instrument.tad_sample_map = {} # TODO
+		instrument.tad_sample_map = {}
+		id_to_sample = {}
+		for i, data in enumerate(instrument.sample_map):
+			note_to_play, sample_to_play = data
+			note_to_play += 12*5
+			if sample_to_play == 65535:
+				continue
+			if sample_to_play in id_to_sample:
+				tad_sample = id_to_sample[sample_to_play]
+			else:
+				tad_sample = TerrificSample(instrument)
+				tad_sample.tracker_sample = sample_to_play
+				tad_sample.tracker_file = furnace_file
+				tad_sample.notes_supported = set()
+				furnace_file.tad_samples.append(tad_sample)
+				id_to_sample[sample_to_play] = tad_sample
+			instrument.tad_sample_map[i + 12*5] = tad_sample
+			tad_sample.note_remap[i + 12*5] = note_to_play
+			tad_sample.notes_supported.add(note_to_play)
+
+		for sample in id_to_sample.values():
+			sample.notes_supported = list(sample.notes_supported)
 	else:
 		tad_instrument = TerrificInstrument(instrument)
 		furnace_file.tad_instruments.append(tad_instrument)
@@ -508,13 +527,24 @@ class TerrificInstrument(object):
 class TerrificSample(object):
 	def __init__(self, tracker_instrument):
 		self.tracker_instrument = tracker_instrument
-		self.name = tracker_instrument.name
+		self.note_remap = {} # Index is Furnace note, and value is Furnace note
+		self.notes_supported = [] # Furnace notes
+
+	@property
+	def name(self):
+		return self.tracker_instrument.name + "_" + self.tracker_file.tracker_samples[self.tracker_sample].name
 
 	def to_dict(self, sample_filenames):
-		d = self.tracker_instrument.to_dict(sample_filenames)
+		d = self.tracker_instrument.to_dict(sample_filenames, sample_num=self.tracker_sample)
 		if d:
 			d["name"] = self.name
-			d["sample_rates"] = [] # TODO
+
+			sample = self.tracker_file.tracker_samples[self.tracker_sample]
+			sample_rates = []
+			for note in self.notes_supported:
+				sample_rates.append(round(sample.frequency_for_note(note)))
+
+			d["sample_rates"] = sample_rates
 		return d
 
 class TrackerInstrument(object):
@@ -543,26 +573,24 @@ class TrackerInstrument(object):
 
 	def tad_note_name_for_note(self, note):
 		if self.use_sample_map:
-			sample_index = self.note_to_sample_index.get(note)
-			assert sample_index != None
-			return sample_index
+			tad_sample = self.tad_sample_map[note]
+			note = tad_sample.note_remap[note]
+			note_index = tad_sample.notes_supported.index(note)
+			return "s%d," % note_index
 		else:
 			self.record_note_as_used(note)
 			return note_name_from_index(note, self.semitone_offset)
 
 	def tad_instrument_name_for_note(self, note):
 		if self.use_sample_map:
-			note_to_play, sample_to_play = self.tad_sample_map.get[note]
-			sample = self.furnace_file.furnace_samples[sample_to_play]
-			if sample:
-				return self.tad_instrument.name + "_" + sample.name
-			return None
+			tad_sample = self.tad_sample_map[note]
+			return tad_sample.name
 		else:
 			return self.tad_instrument.name
 
 	def get_all_tad_instrument_names(self):
 		if self.use_sample_map:
-			assert False # TODO
+			return set(_.name for _ in self.tad_sample_map.values() if _ != None)
 		else:
 			return (self.tad_instrument.name,)
 
@@ -571,9 +599,10 @@ class FurnaceInstrument(TrackerInstrument):
 		super().__init__()
 		self.initial_sample = 0
 
-	def to_dict(self, sample_filenames):
-		look_for = "%.2d - " % (self.initial_sample)
-		sample = self.furnace_file.tracker_samples[self.initial_sample]
+	def to_dict(self, sample_filenames, sample_num=None):
+		sample_num = self.initial_sample if sample_num == None else sample_num
+		look_for = "%.2d - " % sample_num
+		sample = self.furnace_file.tracker_samples[sample_num]
 
 		for filename in sample_filenames:
 			brr_basename = os.path.basename(filename)
@@ -613,9 +642,25 @@ class FurnaceInstrument(TrackerInstrument):
 				return instrument_entry
 		return None
 
-class FurnaceSample(object):
+class TrackerSample(object):
 	def __init__(self):
 		pass
+
+class FurnaceSample(TrackerSample):
+	def __init__(self):
+		super().__init__()
+
+	def frequency_for_note(self, note):
+		c4_rate = self.c4_rate
+		c4_note = (12*5) + 12*4
+		note_difference = note - c4_note
+		twelfth_root_of_2 = 2 ** (1/12)
+
+		if note_difference == 0:
+			return c4_rate
+		elif note_difference > 0:
+			return c4_rate * (twelfth_root_of_2 ** note_difference)
+		return c4_rate / (twelfth_root_of_2 ** (-note_difference))
 
 class FurnaceNote(object):
 	def __init__(self):
