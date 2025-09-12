@@ -199,6 +199,12 @@ class ImpulseTrackerFile(object):
 			sample.vibrato_sweep  = bytes_to_int(s.read(1))
 			sample.vibrato_waveform = bytes_to_int(s.read(1))
 
+			# Avoid duplicate names
+			for other_sample in samples:
+				if other_sample.name == sample.name:
+					sample.name = "sample%d" % sample_number
+					break
+
 			sample.sample_number = sample_number
 			samples.append(sample)
 
@@ -232,8 +238,20 @@ class ImpulseTrackerFile(object):
 				instrument.name = "instrument%d" % instrument_number
 			s.read(6) # Skip ahead
 
-			sample_map = s.read(240)
-			instrument.sample_number = int(sample_map[1]) - 1
+			# Avoid duplicate names
+			for other_instrument in instruments:
+				if other_instrument.name == instrument.name:
+					instrument.name = "instrument%d" % instrument_number
+					break
+
+			# Parse the sample map
+			instrument.sample_map = []
+			for i in range(120):
+				note_to_play   = bytes_to_int(s.read(1))
+				sample_to_play = bytes_to_int(s.read(1))
+				instrument.sample_map.append((note_to_play, sample_to_play))
+
+			instrument.sample_number = instrument.sample_map[0][1] - 1
 			instrument.sample = samples[instrument.sample_number]
 
 			instruments.append(instrument)

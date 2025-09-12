@@ -51,6 +51,17 @@ EFFECTS_WITH_IT_CONTINUE    = {0x00, 0x01, 0x02, 0x03, 0x04, 0x07, 0x0A, 0x83, 0
 # Use a specific effect+parameter to stop a specific effect instead of using zero
 IT_EFFECT_CANCEL_OVERRIDE = {0x80: (0x80, 0x80)}
 
+def make_alphanumeric(text):
+	out = ""
+	for c in text:
+		if c == " ":
+			out += "_"
+		elif (ord(c) < 127 and c.isalnum()) or c == "_":
+			out += c
+		else:
+			out += "x%X" % ord(c)
+	return out.strip()
+
 notes = ["c", "c+", "d", "d+", "e", "f", "f+", "g", "g+", "a", "a+", "b"]
 def note_name_from_index(i, offset):
 	i      += offset
@@ -303,7 +314,7 @@ def FurnaceSampleBlock(furnace_file, name, data, s):
 	sample = FurnaceSample()
 	furnace_file.tracker_samples.append(sample)
 
-	sample.name = read_string(s).replace("/", "-").replace("\\", "-")
+	sample.name = make_alphanumeric(read_string(s))
 	sample.length             = bytes_to_int(s.read(4))
 	sample.compatibility_rate = bytes_to_int(s.read(4))
 	sample.c4_rate            = bytes_to_int(s.read(4)) # In Hz
@@ -323,6 +334,8 @@ def FurnaceSampleBlock(furnace_file, name, data, s):
 instrument_counter = 0
 @block_handler("INS2")
 def FurnaceInstrumentBlock(furnace_file, name, data, s):
+	global instrument_counter
+
 	format_version = bytes_to_int(s.read(2))
 	instrument_type = bytes_to_int(s.read(2))
 	assert instrument_type == 29 # SNES
@@ -333,6 +346,8 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 
 	# Defaults
 	instrument.use_sample_map = False
+	instrument.auto_generate_sample_map = False
+	instrument.sample_map_is_remap_only = False
 
 	while True:
 		feature = s.read(2)
@@ -344,9 +359,16 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 		sf = io.BytesIO(feature_data)
 
 		if feature == b'NA':
-			instrument.name = read_string(sf).replace(" ", "_")
+			instrument_name = read_string(sf)
+			if "!sample" in instrument_name:
+				instrument_name = instrument_name.replace("!sample", "")
+				instrument.auto_generate_sample_map = True
+			if "!remap" in instrument_name:
+				instrument_name = instrument_name.replace("!remap", "")
+				instrument.sample_map_is_remap_only = True
+
+			instrument.name = make_alphanumeric(instrument_name.strip())
 			if args.remove_instrument_names:
-				global instrument_counter
 				instrument.name = "instrument%d" % instrument_counter
 				instrument_counter += 1
 		elif feature == b'SM':
@@ -421,8 +443,27 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 			pass
 			#print("Unrecognized instrument feature", feature)
 
+	# Change the instrument's name if it's a duplicate of a previously used name
+	for other_instrument in furnace_file.tracker_instruments:
+		if other_instrument is not instrument:
+			if other_instrument.name == instrument.name:
+				instrument.name = "instrument%d" % instrument_counter
+				instrument_counter += 1
+				break
+
 	# Create a TAD instrument or sample from this
-	if instrument.use_sample_map:
+	if instrument.use_sample_map and instrument.sample_map_is_remap_only:
+		instrument.notes_remap = {}
+		for i, data in enumerate(instrument.sample_map):
+			note_to_play, sample_to_play = data
+			note_to_play += 12*5
+			instrument.notes_remap[i + 12*5] = note_to_play
+		instrument.use_sample_map = False
+
+		tad_instrument = TerrificInstrument(instrument)
+		furnace_file.tad_instruments.append(tad_instrument)
+		instrument.tad_instrument = tad_instrument
+	elif instrument.use_sample_map and not instrument.sample_map_is_remap_only:
 		instrument.tad_sample_map = {}
 		id_to_sample = {}
 		for i, data in enumerate(instrument.sample_map):
@@ -552,6 +593,7 @@ class TrackerInstrument(object):
 		# Set defaults
 		self.semitone_offset = 0
 		self.use_sample_map = False
+		self.sample_map_is_remap_only = False
 
 	def record_note_as_used(self, note):
 		if note < NoteValue.FIRST or note > NoteValue.LAST:
@@ -571,13 +613,18 @@ class TrackerInstrument(object):
 			self.all_used_notes = set()
 		self.all_used_notes.add(note)
 
-	def tad_note_name_for_note(self, note):
+	def tad_note_name_for_note(self, note, arpeggio=False):
 		if self.use_sample_map:
 			tad_sample = self.tad_sample_map[note]
 			note = tad_sample.note_remap[note]
 			note_index = tad_sample.notes_supported.index(note)
-			return "s%d," % note_index
+			if arpeggio:
+				return note_name_from_index(note_index + 12*5)
+			else:
+				return "s%d," % note_index
 		else:
+			if hasattr(self, "notes_remap"):
+				note = self.notes_remap[note]
 			self.record_note_as_used(note)
 			return note_name_from_index(note, self.semitone_offset)
 
@@ -1059,7 +1106,7 @@ class FurnacePattern(object):
 				if legato:
 					apply_legato()
 				if arpeggio_enabled:
-					out.append("{{%s %s %s}}%%%d,%%%d" % (current_instrument_ref.tad_note_name_for_note(note.note), current_instrument_ref.tad_note_name_for_note(note.note + arpeggio_note1), current_instrument_ref.tad_note_name_for_note(note.note + arpeggio_note2), duration_in_tad_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / furnace_ticks_per_row))) ))
+					out.append("{{%s %s %s}}%%%d,%%%d" % (current_instrument_ref.tad_note_name_for_note(note.note, arpeggio=True), current_instrument_ref.tad_note_name_for_note(note.note + arpeggio_note1, arpeggio=True), current_instrument_ref.tad_note_name_for_note(note.note + arpeggio_note2, arpeggio=True), duration_in_tad_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / furnace_ticks_per_row))) ))
 					record_note_as_used(note.note + arpeggio_note1)
 					record_note_as_used(note.note + arpeggio_note2)
 				else:
