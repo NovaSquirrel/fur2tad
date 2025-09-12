@@ -301,7 +301,7 @@ def FurnaceAssetDirectoryBlock(furnace_file, name, data, s):
 @block_handler("SMP2")
 def FurnaceSampleBlock(furnace_file, name, data, s):
 	sample = FurnaceSample()
-	furnace_file.samples.append(sample)
+	furnace_file.tracker_samples.append(sample)
 
 	sample.name = read_string(s).replace("/", "-").replace("\\", "-")
 	sample.length             = bytes_to_int(s.read(4))
@@ -328,7 +328,11 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 	assert instrument_type == 29 # SNES
 
 	instrument = FurnaceInstrument()
-	furnace_file.instruments.append(instrument)
+	furnace_file.tracker_instruments.append(instrument)
+	instrument.furnace_file = furnace_file
+
+	# Defaults
+	instrument.use_sample_map = False
 
 	while True:
 		feature = s.read(2)
@@ -417,6 +421,16 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 			pass
 			#print("Unrecognized instrument feature", feature)
 
+	# Create a TAD instrument or sample from this
+	if instrument.use_sample_map:
+		tad_sample = TerrificSample(instrument)
+		furnace_file.tad_samples.append(tad_sample)
+		instrument.tad_sample_map = {} # TODO
+	else:
+		tad_instrument = TerrificInstrument(instrument)
+		furnace_file.tad_instruments.append(tad_instrument)
+		instrument.tad_instrument = tad_instrument
+
 @block_handler("PATN")
 def FurnacePatternBlock(furnace_file, name, data, s):
 	song          = furnace_file.songs[bytes_to_int(s.read(1))]
@@ -476,11 +490,128 @@ def FurnacePatternBlock(furnace_file, name, data, s):
 
 # -------------------------------------------------------------------
 
-class FurnaceInstrument(object):
+class TerrificInstrument(object):
+	def __init__(self, tracker_instrument):
+		self.tracker_instrument = tracker_instrument
+		self.name = tracker_instrument.name
+
+	def to_dict(self, sample_filenames):
+		d = self.tracker_instrument.to_dict(sample_filenames)
+		if d:
+			d["name"] = self.name
+			first_note = self.tracker_instrument.lowest_used_note if hasattr(self.tracker_instrument, "lowest_used_note") else 12*(5+args.default_instrument_first_octave)
+			last_note  = self.tracker_instrument.highest_used_note if hasattr(self.tracker_instrument, "highest_used_note") else 12*(5+args.default_instrument_last_octave)+11
+			d["first_octave"] = first_note // 12 - 5
+			d["last_octave"] = last_note // 12 - 5
+		return d
+
+class TerrificSample(object):
+	def __init__(self, tracker_instrument):
+		self.tracker_instrument = tracker_instrument
+		self.name = tracker_instrument.name
+
+	def to_dict(self, sample_filenames):
+		d = self.tracker_instrument.to_dict(sample_filenames)
+		if d:
+			d["name"] = self.name
+			d["sample_rates"] = [] # TODO
+		return d
+
+class TrackerInstrument(object):
 	def __init__(self):
 		# Set defaults
-		self.initial_sample = 0
 		self.semitone_offset = 0
+		self.use_sample_map = False
+
+	def record_note_as_used(self, note):
+		if note < NoteValue.FIRST or note > NoteValue.LAST:
+			return
+		note += self.semitone_offset
+		if not hasattr(self, "instrument_is_used"):
+			self.instrument_is_used = True
+		if not hasattr(self, "lowest_used_note"):
+			self.lowest_used_note = note
+		if note < self.lowest_used_note:
+			self.lowest_used_note = note
+		if not hasattr(self, "highest_used_note"):
+			self.highest_used_note = note
+		if note > self.highest_used_note:
+			self.highest_used_note = note
+		if not hasattr(self, "all_used_notes"):
+			self.all_used_notes = set()
+		self.all_used_notes.add(note)
+
+	def tad_note_name_for_note(self, note):
+		if self.use_sample_map:
+			sample_index = self.note_to_sample_index.get(note)
+			assert sample_index != None
+			return sample_index
+		else:
+			self.record_note_as_used(note)
+			return note_name_from_index(note, self.semitone_offset)
+
+	def tad_instrument_name_for_note(self, note):
+		if self.use_sample_map:
+			note_to_play, sample_to_play = self.tad_sample_map.get[note]
+			sample = self.furnace_file.furnace_samples[sample_to_play]
+			if sample:
+				return self.tad_instrument.name + "_" + sample.name
+			return None
+		else:
+			return self.tad_instrument.name
+
+	def get_all_tad_instrument_names(self):
+		if self.use_sample_map:
+			assert False # TODO
+		else:
+			return (self.tad_instrument.name,)
+
+class FurnaceInstrument(TrackerInstrument):
+	def __init__(self):
+		super().__init__()
+		self.initial_sample = 0
+
+	def to_dict(self, sample_filenames):
+		look_for = "%.2d - " % (self.initial_sample)
+		sample = self.furnace_file.tracker_samples[self.initial_sample]
+
+		for filename in sample_filenames:
+			brr_basename = os.path.basename(filename)
+			if brr_basename.startswith(look_for):
+				c5_freq = 261.626
+				wavelength = sample.c4_rate / c5_freq
+				tuning_freq = 32000 / wavelength
+
+				instrument_entry = {
+					"source": brr_basename,
+					"freq": tuning_freq,
+					"loop": "override_brr_loop_point" if sample.loop_start != -1 else "none",
+					"envelope": "gain F127",
+				}
+
+				if hasattr(self, "envelope_on") and self.envelope_on:
+					instrument_entry["envelope"] = "adsr %d %d %d %d" % (self.attack, self.decay, self.sustain, self.release)
+				else:
+					if hasattr(self, "gain_mode"):
+						if self.gain_mode == 0: # Direct
+							instrument_entry["envelope"] = "gain F%d" % self.gain
+						elif self.gain_mode == 4: # Decreasing
+							instrument_entry["envelope"] = "gain D%d" % self.gain
+						elif self.gain_mode == 5: # Exponential decrease
+							instrument_entry["envelope"] = "gain E%d" % self.gain
+						elif self.gain_mode == 6: # Increasing
+							instrument_entry["envelope"] = "gain I%d" % self.gain
+						elif self.gain_mode == 7: # Bent
+							instrument_entry["envelope"] = "gain B%d" % self.gain
+						else:
+							instrument_entry["envelope"] = "gain F127"
+					else:
+						instrument_entry["envelope"] = "gain F127"
+
+				if sample.loop_start != -1:
+					instrument_entry["loop_setting"] = sample.loop_start
+				return instrument_entry
+		return None
 
 class FurnaceSample(object):
 	def __init__(self):
@@ -507,26 +638,6 @@ class FurnacePattern(object):
 	# Convert a pattern to MML without attempting to do any compression
 	def convert_to_tad(self, song, speed_at_each_row, loop_point):
 		out = []
-
-		# Utilities
-		def record_note_as_used(note):
-			if current_instrument == None or note < NoteValue.FIRST or note > NoteValue.LAST:
-				return
-			instrument = song.furnace_file.instruments[current_instrument]
-			note += semitone_offset
-			if not hasattr(instrument, "instrument_is_used"):
-				instrument.instrument_is_used = True
-			if not hasattr(instrument, "lowest_used_note"):
-				instrument.lowest_used_note = note
-			if note < instrument.lowest_used_note:
-				instrument.lowest_used_note = note
-			if not hasattr(instrument, "highest_used_note"):
-				instrument.highest_used_note = note
-			if note > instrument.highest_used_note:
-				instrument.highest_used_note = note
-			if not hasattr(instrument, "all_used_notes"):
-				instrument.all_used_notes = set()
-			instrument.all_used_notes.add(note)
 
 		def apply_legato():
 			if out[-1].startswith("r"): # Rest
@@ -623,7 +734,9 @@ class FurnacePattern(object):
 		# Variables to track
 		row_index = 0
 
-		current_instrument = None
+		current_instrument_num  = None # Index
+		current_instrument_ref  = None # Reference to FurnaceInstrument object
+		current_instrument_name = ""   # Name to use with TAD to refer to this instrument
 		current_volume = None
 
 		# Furnace state
@@ -667,10 +780,14 @@ class FurnacePattern(object):
 				already_wrote_loop = True # TODO: Figure out why it's attempting to insert it multiple times?
 
 			# Write any instrument changes
-			if note.instrument != current_instrument and note.instrument != None:
-				current_instrument = note.instrument
-				out.append("@%s" % song.furnace_file.instruments[current_instrument].name)
-			semitone_offset = song.furnace_file.instruments[current_instrument].semitone_offset if current_instrument != None else 0
+			if note.instrument != current_instrument_num and note.instrument != None:
+				current_instrument_num = note.instrument
+				current_instrument_ref = song.furnace_file.tracker_instruments[current_instrument_num]
+			if current_instrument_ref:
+				instrument_name = current_instrument_ref.tad_instrument_name_for_note(most_recent_note)
+				if instrument_name != current_instrument_name:
+					current_instrument_name = instrument_name
+					out.append("@%s" % current_instrument_name)
 
 			# Write any volume changes
 			if (current_volume == None or note.volume != current_volume) and note.volume != None:
@@ -841,10 +958,8 @@ class FurnacePattern(object):
 				if furnace_ticks_from_rows >= furnace_ticks_to_get_to_target:
 					slide_tad_ticks = furnace_ticks_to_tad_ticks(furnace_ticks_to_get_to_target, furnace_ticks_per_second, tad_timer_value)
 					leftover_tad_ticks = duration_in_tad_ticks - slide_tad_ticks
-					note_start_name = note_name_from_index(portamento_from, semitone_offset)
-					note_stop_name = note_name_from_index(portamento_target, semitone_offset)
-					record_note_as_used(portamento_from)
-					record_note_as_used(portamento_target)
+					note_start_name = current_instrument_ref.tad_note_name_for_note(portamento_from)
+					note_stop_name = current_instrument_ref.tad_note_name_for_note(portamento_target)
 
 					if slide_tad_ticks <= 0 or portamento_from == portamento_target: # If it's a zero tick portamento then just do the target note
 						out.append("%s%%%d" % (note_stop_name, duration_in_tad_ticks))
@@ -869,10 +984,8 @@ class FurnacePattern(object):
 						slide_amount = -slide_amount
 					ending_note = portamento_from + slide_amount
 
-					note_start_name = note_name_from_index(portamento_from, semitone_offset)
-					note_stop_name = note_name_from_index(ending_note, semitone_offset)
-					record_note_as_used(portamento_from)
-					record_note_as_used(ending_note)
+					note_start_name = current_instrument_ref.tad_note_name_for_note(portamento_from)
+					note_stop_name = current_instrument_ref.tad_note_name_for_note(ending_note)
 					most_recent_note = ending_note
 
 					if portamento_from == ending_note:
@@ -887,10 +1000,8 @@ class FurnacePattern(object):
 					apply_legato()
 				starting_note = note.note if note.note != None else most_recent_note
 				ending_note = min(NoteValue.LAST_VALID_TAD, max(NoteValue.FIRST_VALID_TAD, starting_note + total_slide_amount))
-				note_start_name = note_name_from_index(starting_note, semitone_offset)
-				note_stop_name = note_name_from_index(ending_note, semitone_offset)
-				record_note_as_used(starting_note)
-				record_note_as_used(ending_note)
+				note_start_name = current_instrument_ref.tad_note_name_for_note(starting_note)
+				note_stop_name = current_instrument_ref.tad_note_name_for_note(ending_note)
 				most_recent_note = ending_note
 
 				if starting_note == ending_note:
@@ -902,16 +1013,15 @@ class FurnacePattern(object):
 			elif note.note != None and note.note >= NoteValue.FIRST and note.note <= NoteValue.LAST:
 				if legato:
 					apply_legato()
-				record_note_as_used(note.note)
 				if arpeggio_enabled:
-					out.append("{{%s %s %s}}%%%d,%%%d" % (note_name_from_index(note.note, semitone_offset), note_name_from_index(note.note + arpeggio_note1, semitone_offset), note_name_from_index(note.note + arpeggio_note2, semitone_offset), duration_in_tad_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / furnace_ticks_per_row))) ))
+					out.append("{{%s %s %s}}%%%d,%%%d" % (current_instrument_ref.tad_note_name_for_note(note.note), current_instrument_ref.tad_note_name_for_note(note.note + arpeggio_note1), current_instrument_ref.tad_note_name_for_note(note.note + arpeggio_note2), duration_in_tad_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / furnace_ticks_per_row))) ))
 					record_note_as_used(note.note + arpeggio_note1)
 					record_note_as_used(note.note + arpeggio_note2)
 				else:
 					if noise_mode:
 						note_name = "N%d," % noise_frequency
 					else:
-						note_name = note_name_from_index(note.note, semitone_offset)
+						note_name = current_instrument_ref.tad_note_name_for_note(note.note)
 					if not next_note or next_note.note != None:
 						out.append("%s%%%d" % (note_name, duration_in_tad_ticks))
 					else:
@@ -958,8 +1068,8 @@ class TrackerSong(object):
 		# Define the instruments
 		out += "; Instrument definitions\n"
 		for instrument_index in self.instruments_used:
-			instrument = self.furnace_file.instruments[instrument_index]
-			out += "@%s %s\n" % (instrument.name, instrument.name)
+			for name in self.furnace_file.tracker_instruments[instrument_index].get_all_tad_instrument_names():
+				out += "@%s %s\n" % (name, name)
 
 		out += "\n"
 
@@ -1142,9 +1252,10 @@ class FurnaceFile(object):
 	def __init__(self, filename):
 		# Storage for things defined in the file
 		self.songs = []
-		self.instruments = []
-		self.samples = []
-		self.instruments_used = set()
+		self.tracker_instruments = []
+		self.tracker_samples = []
+		self.tad_instruments = []
+		self.tad_samples = []
 
 		# Open the file
 		f = open(filename, "rb")
@@ -1215,7 +1326,7 @@ if __name__ == "__main__":
 	dump_folder = args.dump_samples or args.project_folder
 	if dump_folder:
 		os.makedirs(dump_folder, exist_ok=True)
-		for i, sample in enumerate(fur_file.samples):
+		for i, sample in enumerate(fur_file.tracker_samples):
 			brr_path = os.path.join(dump_folder, "%.2d - %s.brr" % (i, sample.name))
 			assert sample.is_brr
 
@@ -1256,59 +1367,16 @@ if __name__ == "__main__":
 				f.write(mml_text)
 			project["songs"].append({"name": song.name, "source": filename})
 
-		# Write the instruments
+		# Write the instruments and samples
 		brrs = glob.glob(os.path.join(args.project_folder, '*.brr'))
-		for i, instrument in enumerate(fur_file.instruments):
-			if not args.keep_all_instruments and (not hasattr(instrument, "instrument_is_used") or not instrument.instrument_is_used):
-				continue
-			look_for = "%.2d - " % (instrument.initial_sample)
-			sample = fur_file.samples[instrument.initial_sample]
-
-			for filename in brrs:
-				brr_basename = os.path.basename(filename)
-				if brr_basename.startswith(look_for):
-					c5_freq = 261.626
-					wavelength = sample.c4_rate / c5_freq
-					tuning_freq = 32000 / wavelength
-
-					first_note = instrument.lowest_used_note if hasattr(instrument, "lowest_used_note") else 12*(5+args.default_instrument_first_octave)
-					last_note  = instrument.highest_used_note  if hasattr(instrument, "highest_used_note") else 12*(5+args.default_instrument_last_octave)+11
-
-					instrument_entry = {
-						"name": instrument.name,
-						"source": brr_basename,
-						"freq": tuning_freq,
-						"loop": "override_brr_loop_point" if sample.loop_start != -1 else "none",
-						"first_octave": first_note // 12 - 5,
-						"last_octave": last_note // 12 - 5,
-						"envelope": "gain F127",
-					}
-
-					if hasattr(instrument, "envelope_on") and instrument.envelope_on:
-						instrument_entry["envelope"] = "adsr %d %d %d %d" % (instrument.attack, instrument.decay, instrument.sustain, instrument.release)
-					else:
-						if hasattr(instrument, "gain_mode"):
-							if instrument.gain_mode == 0: # Direct
-								instrument_entry["envelope"] = "gain F%d" % instrument.gain
-							elif instrument.gain_mode == 4: # Decreasing
-								instrument_entry["envelope"] = "gain D%d" % instrument.gain
-							elif instrument.gain_mode == 5: # Exponential decrease
-								instrument_entry["envelope"] = "gain E%d" % instrument.gain
-							elif instrument.gain_mode == 6: # Increasing
-								instrument_entry["envelope"] = "gain I%d" % instrument.gain
-							elif instrument.gain_mode == 7: # Bent
-								instrument_entry["envelope"] = "gain B%d" % instrument.gain
-							else:
-								instrument_entry["envelope"] = "gain F127"
-						else:
-							instrument_entry["envelope"] = "gain F127"
-
-					if sample.loop_start != -1:
-						instrument_entry["loop_setting"] = sample.loop_start
-					project["instruments"].append(instrument_entry)
-					break
-			else:
-				print("Can't find file for instrument %d (%s)" % (instrument, it_instrument.name))
+		for instrument in fur_file.tad_instruments:
+			d = instrument.to_dict(brrs)
+			if d != None:
+				project["instruments"].append(d)
+		for sample in fur_file.tad_samples:
+			d = sample.to_dict(brrs)
+			if d != None:
+				project["samples"].append(d)
 
 		# Write the final project file
 		with open(terrificaudio_path, 'w') as f:

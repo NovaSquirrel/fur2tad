@@ -28,20 +28,53 @@ from fur2tad import *
 
 IT_EFFECT_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#\\" # 0x01 through 0x1C
 
-class ImpulseTrackerInstrument(object):
+class ImpulseTrackerInstrumentSampleMixin(object):
+	def to_dict(self, sample_filenames):
+		if hasattr(self, "sample"):
+			look_for = "%.2d - " % (self.sample_number+1)
+			sample = self.sample
+		else:
+			look_for = "%.2d - " % (self.sample_number+1)
+			sample = self
+
+		for filename in sample_filenames:
+			brr_basename = os.path.basename(filename)
+			if brr_basename.startswith(look_for):
+				c5_rate = sample.c5_rate
+
+				bytes_per_sample_point = 2 if sample.flags_is_16bit else 1
+				c5_freq = 261.626
+				wavelength = (c5_rate / bytes_per_sample_point) / c5_freq
+				tuning_freq = 32000 / wavelength
+
+				instrument_entry = {
+					"name": self.name,
+					"source": wav_basename,
+					"freq": tuning_freq,
+					"loop": "loop_with_filter" if sample.flags_looped else "none",
+					"envelope": "gain F127",
+				}
+				if sample.flags_looped:
+					instrument_entry["loop_setting"] = 0
+				return instrument_entry
+		return None
+
+class ImpulseTrackerInstrument(ImpulseTrackerInstrumentSampleMixin, TrackerInstrument):
 	def __init__(self):
-		self.semitone_offset = 0
-class ImpulseTrackerSample(object):
+		super().__init__()
+
+class ImpulseTrackerSample(ImpulseTrackerInstrumentSampleMixin, TrackerInstrument):
 	def __init__(self):
-		self.semitone_offset = 0
+		super().__init__()
 
 class ImpulseTrackerFile(object):
 	def __init__(self, filename):
 		# Storage for things defined in the file
 		self.songs = []
-		self.instruments = []
-		self.samples = []
-		self.instruments_used = set()
+		self.tracker_instruments = []
+		self.tracker_samples = []
+		self.tad_instruments = []
+		self.tad_samples = []
 
 		# Variables that are expected but not used
 		self.groove_patterns = []
@@ -165,7 +198,10 @@ class ImpulseTrackerFile(object):
 			sample.vibrato_depth  = bytes_to_int(s.read(1))
 			sample.vibrato_sweep  = bytes_to_int(s.read(1))
 			sample.vibrato_waveform = bytes_to_int(s.read(1))
+
+			sample.sample_number = sample_number
 			samples.append(sample)
+
 		self.it_samples = samples
 
 		###################################################
@@ -383,9 +419,13 @@ class ImpulseTrackerFile(object):
 						channel_patterns[channel].rows[row_number] = note
 
 		if self.use_instruments:
-			self.instruments = instruments
+			self.tracker_instruments = instruments
 		else:
-			self.instruments = samples
+			self.tracker_instruments = samples
+		for instrument in self.tracker_instruments:
+			tad_instrument = TerrificInstrument(instrument)
+			self.tad_instruments.append(tad_instrument)
+			instrument.tad_instrument = tad_instrument
 
 		#print(song.patterns[0][0].rows)
 
@@ -428,44 +468,14 @@ if args.project_folder:
 
 	# Write the instruments
 	wavs = glob.glob(os.path.join(args.project_folder, '*.wav'))
-	for instrument in it_file.song.instruments_used:
-		it_instrument = it_file.instruments[instrument]
-
-		if it_file.use_instruments:
-			look_for = "%.2d - " % (it_instrument.sample_number+1)
-			sample = it_instrument.sample
-		else:
-			look_for = "%.2d - " % (instrument+1)
-			sample = it_instrument
-
-		for filename in wavs:
-			wav_basename = os.path.basename(filename)
-			if wav_basename.startswith(look_for):
-				c5_rate = sample.c5_rate
-
-				bytes_per_sample_point = 2 if sample.flags_is_16bit else 1
-				c5_freq = 261.626
-				wavelength = (c5_rate / bytes_per_sample_point) / c5_freq
-				tuning_freq = 32000 / wavelength
-
-				first_note = it_instrument.lowest_used_note if hasattr(it_instrument, "lowest_used_note") else 12*(5+args.default_instrument_first_octave)
-				last_note  = it_instrument.highest_used_note if hasattr(it_instrument, "highest_used_note") else 12*(5+args.default_instrument_last_octave)+11
-
-				instrument_entry = {
-					"name": it_instrument.name,
-					"source": wav_basename,
-					"freq": tuning_freq,
-					"loop": "loop_with_filter" if sample.flags_looped else "none",
-					"first_octave": first_note // 12 - 5,
-					"last_octave": last_note // 12 - 5,
-					"envelope": "gain F127",
-				}
-				if sample.flags_looped:
-					instrument_entry["loop_setting"] = 0
-				project["instruments"].append(instrument_entry)
-				break
-		else:
-			print("Can't find file for instrument %d (%s)" % (instrument+1, it_instrument.name))
+	for instrument in it_file.tad_instruments:
+		d = instrument.to_dict(wavs)
+		if d != None:
+			project["instruments"].append(d)
+	for sample in it_file.tad_samples:
+		d = sample.to_dict(brrs)
+		if d != None:
+			project["samples"].append(d)
 
 	# Write the final project file
 	with open(terrificaudio_path, 'w') as f:
