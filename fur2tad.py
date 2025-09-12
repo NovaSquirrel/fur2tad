@@ -452,7 +452,11 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 				break
 
 	# Create a TAD instrument or sample from this
-	if instrument.use_sample_map and instrument.sample_map_is_remap_only:
+	if instrument.auto_generate_sample_map and instrument.use_sample_map and not instrument.sample_map_is_remap_only:
+		instrument.auto_generate_sample_map = False
+	if instrument.auto_generate_sample_map:
+		return
+	elif instrument.use_sample_map and instrument.sample_map_is_remap_only:
 		instrument.notes_remap = {}
 		for i, data in enumerate(instrument.sample_map):
 			note_to_play, sample_to_play = data
@@ -594,6 +598,7 @@ class TrackerInstrument(object):
 		self.semitone_offset = 0
 		self.use_sample_map = False
 		self.sample_map_is_remap_only = False
+		self.all_used_notes = set()
 
 	def record_note_as_used(self, note):
 		if note < NoteValue.FIRST or note > NoteValue.LAST:
@@ -609,8 +614,6 @@ class TrackerInstrument(object):
 			self.highest_used_note = note
 		if note > self.highest_used_note:
 			self.highest_used_note = note
-		if not hasattr(self, "all_used_notes"):
-			self.all_used_notes = set()
 		self.all_used_notes.add(note)
 
 	def tad_note_name_for_note(self, note, arpeggio=False):
@@ -1135,13 +1138,6 @@ class TrackerSong(object):
 		self.empty_patterns = set()                   # each entry is (channel, pattern_id)
 
 	def convert_to_tad(self, impulse_tracker = False):
-		out = ""
-
-		if hasattr(self, 'name') and self.name:
-			out += "#Title %s\n" % self.name
-		if hasattr(self, 'author') and self.author:
-			out += "#Composer %s\n" % self.author
-
 		groove_mode = len(self.speed_pattern) > 1
 		multiple_groove_patterns = self.furnace_file.groove_patterns != []
 
@@ -1151,19 +1147,7 @@ class TrackerSong(object):
 		else:
 			tad_timer_value, tad_ticks_per_row = find_timer_and_multiplier_for_tempo_and_speed(self.ticks_per_second, self.speed1)
 			tad_ticks_per_row = [tad_ticks_per_row]
-
-		out += "#Timer %d\n" % tad_timer_value
 		self.tad_timer_value_at_start = tad_timer_value
-
-		out += "\n"
-
-		# Define the instruments
-		out += "; Instrument definitions\n"
-		for instrument_index in self.instruments_used:
-			for name in self.furnace_file.tracker_instruments[instrument_index].get_all_tad_instrument_names():
-				out += "@%s %s\n" % (name, name)
-
-		out += "\n"
 
 		# Convert the orders and patterns into one long pattern per channel, plus information about loop points and speeds
 		combined_patterns = [FurnacePattern() for _ in range(CHANNELS)]
@@ -1179,6 +1163,7 @@ class TrackerSong(object):
 		current_ticks_per_second = self.ticks_per_second
 		current_speed_pattern = self.speed_pattern
 		need_to_remake_tad_ticks_per_row = False
+		current_instrument_index = [None for _ in range(CHANNELS)]
 
 		# Impulse tracker state
 		previous_row_effects = [set() for _ in range(CHANNELS)]
@@ -1198,6 +1183,10 @@ class TrackerSong(object):
 			for channel in range(CHANNELS):
 				note = channel_patterns[channel].rows[row_index]
 				combined_patterns[channel].rows.append(note)
+				if note.instrument != None:
+					current_instrument_index[channel] = note.instrument
+				if current_instrument_index[channel] != None and note.note:
+					self.furnace_file.tracker_instruments[current_instrument_index[channel]].record_note_as_used(note.note)
 
 				this_row_effects = set()
 				for effect_index, effect_data in enumerate(note.effects):
@@ -1296,6 +1285,36 @@ class TrackerSong(object):
 					for effect_type in EFFECTS_WITH_IT_AUTO_CANCEL.union( set((0x80,)) ):
 						if effect_type in effects_used_by_channel[channel] and effect_type not in effect_types_at_loop_point:
 							combined_patterns[channel].rows[loop_point].effects.append(IT_EFFECT_CANCEL_OVERRIDE.get(effect_type, (effect_type, 0)) )
+
+		# Generate TAD samples late for instruments that were marked with "!sample"
+		for instrument in self.furnace_file.tracker_instruments:
+			if instrument.auto_generate_sample_map:
+				tad_sample = TerrificSample(instrument)
+				tad_sample.tracker_sample = instrument.initial_sample
+				tad_sample.tracker_file = self.furnace_file
+				tad_sample.notes_supported = list(instrument.all_used_notes)
+				self.furnace_file.tad_samples.append(tad_sample)
+				instrument.auto_generate_sample_map = False
+				instrument.tad_sample_map = {}
+				for note in instrument.all_used_notes:
+					instrument.tad_sample_map[note] = tad_sample
+					tad_sample.note_remap[note] = note
+				instrument.use_sample_map = True
+
+		out = ""
+		if hasattr(self, 'name') and self.name:
+			out += "#Title %s\n" % self.name
+		if hasattr(self, 'author') and self.author:
+			out += "#Composer %s\n" % self.author
+		out += "#Timer %d\n" % tad_timer_value
+		out += "\n"
+
+		# Define the instruments
+		out += "; Instrument definitions\n"
+		for instrument_index in self.instruments_used:
+			for name in self.furnace_file.tracker_instruments[instrument_index].get_all_tad_instrument_names():
+				out += "@%s %s\n" % (name, name)
+		out += "\n"
 
 		# Now we have one long pattern for each channel
 		mml_sequences = {"ABCDEFGH"[channel]:pattern.convert_to_tad(self, speed_at_each_row, loop_point) for channel,pattern in enumerate(combined_patterns)}
