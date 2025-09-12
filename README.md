@@ -40,7 +40,6 @@ Some Furnace features that are not supported:
 * Macros (Except for arpeggio macros that have only one step)
 * Virtual tempo
 * Wavetable
-* Sample map
 * Pitch and volume slides that would take more than 256 TAD timer ticks - Could be implemented by breaking the slide into parts
 
 # Terrific Audio Driver's pitch table
