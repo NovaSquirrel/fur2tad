@@ -31,10 +31,10 @@ IT_EFFECT_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#\\" # 0x01 through 0x1C
 class ImpulseTrackerInstrumentSampleMixin(object):
 	def to_dict(self, sample_filenames):
 		if hasattr(self, "sample"):
-			look_for = "%.2d - " % (self.sample_number+1)
+			look_for = "%.2d - " % (self.tracker_sample+1)
 			sample = self.sample
 		else:
-			look_for = "%.2d - " % (self.sample_number+1)
+			look_for = "%.2d - " % (self.tracker_sample+1)
 			sample = self
 
 		for filename in sample_filenames:
@@ -193,7 +193,6 @@ class ImpulseTrackerFile(object):
 		###################################################
 		# Samples
 		###################################################
-		samples = []
 		for sample_number in range(sample_count):
 			sample = ImpulseTrackerSample()
 			s.seek(sample_offsets[sample_number])
@@ -233,20 +232,17 @@ class ImpulseTrackerFile(object):
 			sample.vibrato_waveform = bytes_to_int(s.read(1))
 
 			# Avoid duplicate names
-			for other_sample in samples:
+			for other_sample in self.tracker_samples:
 				if other_sample.name == sample.name:
 					sample.name = "sample%d" % sample_number
 					break
 
-			sample.sample_number = sample_number
-			samples.append(sample)
-
-		self.it_samples = samples
+			sample.tracker_sample = sample_number
+			self.tracker_samples.append(sample)
 
 		###################################################
 		# Instruments
 		###################################################
-		instruments = []
 		for instrument_number in range(instrument_count):
 			instrument = ImpulseTrackerInstrument()
 			s.seek(instrument_offsets[instrument_number])
@@ -273,7 +269,7 @@ class ImpulseTrackerFile(object):
 			s.read(6) # Skip ahead
 
 			# Avoid duplicate names
-			for other_instrument in instruments:
+			for other_instrument in self.tracker_instruments:
 				if other_instrument.name == instrument.name:
 					instrument.name = "instrument%d" % instrument_number
 					break
@@ -286,12 +282,12 @@ class ImpulseTrackerFile(object):
 				sample_to_play = bytes_to_int(s.read(1))
 				instrument.sample_map.append((note_to_play, sample_to_play))
 				instrument.note_remap[i + 12*5] = note_to_play
+			all_samples_are_assigned = all(_[1] != 0 for _ in instrument.sample_map)
 			all_samples_are_the_same = all(_[1] == instrument.sample_map[0][1] for _ in instrument.sample_map)
-			instrument.sample_number = instrument.sample_map[0][1] - 1
-			instrument.sample = samples[instrument.sample_number]
+			instrument.tracker_sample = instrument.sample_map[0][1] - 1
+			instrument.sample = self.tracker_samples[instrument.tracker_sample]
 
-			instruments.append(instrument)
-		self.it_instruments = instruments
+			self.tracker_instruments.append(instrument)
 
 		###################################################
 		# Song data
@@ -472,12 +468,12 @@ class ImpulseTrackerFile(object):
 					if channel <= CHANNELS:
 						channel_patterns[channel].rows[row_number] = note
 
-		if self.use_instruments:
-			self.tracker_instruments = instruments
-		else:
-			self.tracker_instruments = samples
+		if not self.use_instruments:
+			self.tracker_instruments = self.tracker_samples
 		for instrument in self.tracker_instruments:
 			tad_instrument = TerrificInstrument(instrument)
+			tad_instrument.tracker_sample = instrument.tracker_sample
+			tad_instrument.tracker_file = self
 			self.tad_instruments.append(tad_instrument)
 			instrument.tad_instrument = tad_instrument
 

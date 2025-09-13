@@ -52,8 +52,8 @@ To specify that you want a Furnace instrument to turn into a TAD sample, use a s
 # Metadata in instrument names
 The converter checks for commands in each instrument's name, which will affect how the instrument is treated in the conversion process.
 
-* `!remap`: Do not change the instrument into a TAD sample; instead, treat a sample map (if provided) as a table that lists what notes to change into which other notes. The samples on each entry in the sample map are ignored.
-* `!sample`: Change the instrument into a TAD sample by looking at the song data to determine which notes (and consequently, sample rates) are needed. Will only currently work on Furnace files that contain a single song.
+* `!instr`: Do not change the instrument into a TAD sample, even if a sample map is provided. The sample map is still used for note remapping, and multiple TAD instruments will be created if the sample map uses multiple samples.
+* `!sample`: Ignored if there is a sample map, and the instrument will become a TAD sample like it normally would. If there is no sample map, change the instrument into a TAD sample by looking at the song data to determine which notes (and consequently, sample rates) are needed.
 
 # Command line arguments
 * `--auto-timer-mode low_error/lowest_error`: Choose a strategy for automatically choosing TAD timer values from Furnace speeds and tempos.

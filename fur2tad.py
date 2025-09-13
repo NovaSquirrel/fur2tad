@@ -364,10 +364,9 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 			# Process commands in the name
 			if "!sample" in instrument_name:
 				instrument_name = instrument_name.replace("!sample", "")
-				instrument.delayed_tad_sample_creation = True
 				override_as_sample = True
-			if "!remap" in instrument_name:
-				instrument_name = instrument_name.replace("!remap", "")
+			if "!instr" in instrument_name:
+				instrument_name = instrument_name.replace("!instr", "")
 				override_as_instrument = True
 
 			# Clean up the instrument name
@@ -457,13 +456,15 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 				instrument_counter += 1
 				break
 
-	# Create a TAD instrument or sample from this
-	if instrument.delayed_tad_sample_creation:
-		if instrument.note_remap: # If there's a sample map
-			instrument.delayed_tad_sample_creation = False
-		else:
-			return
-	if instrument.note_remap and not override_as_instrument:
+	# Create on or more TAD instruments and/or samples
+	if not instrument.note_remap and override_as_sample: # Become sample
+		tad_sample = TerrificSample(instrument)
+		tad_sample.tracker_sample = instrument.initial_sample
+		tad_sample.tracker_file = furnace_file
+		tad_sample.use_shortened_name = True
+		furnace_file.tad_samples.append(tad_sample)
+		instrument.tad_sample = tad_sample
+	if instrument.note_remap and not override_as_instrument: # Become samples
 		id_to_sample = {}
 
 		for note, sample_to_play in instrument.tracker_sample_number_for_note.items():
@@ -473,17 +474,35 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 				tad_sample = TerrificSample(instrument)
 				tad_sample.tracker_sample = sample_to_play
 				tad_sample.tracker_file = furnace_file
-				tad_sample.notes_supported = set()
 				furnace_file.tad_samples.append(tad_sample)
 				id_to_sample[sample_to_play] = tad_sample
 			instrument.tad_sample_for_note[note] = tad_sample
-			tad_sample.notes_supported.add(instrument.note_remap[note])
+		if len(id_to_sample) == 1:
+			for _ in id_to_sample.values():
+				_.use_shortened_name = True
+				break
+	elif instrument.note_remap: # Become multiple instruments
+		id_to_instrument = {}
 
-		for sample in id_to_sample.values():
-			sample.notes_supported = list(sample.notes_supported)
-		instrument.use_tad_samples = True
-	else:
+		for note, sample_to_play in instrument.tracker_sample_number_for_note.items():
+			if sample_to_play in id_to_instrument:
+				tad_instrument = id_to_instrument[sample_to_play]
+			else:
+				tad_instrument = TerrificSample(instrument)
+				tad_instrument.tracker_sample = sample_to_play
+				tad_instrument.tracker_file = furnace_file
+				furnace_file.tad_instruments.append(tad_instrument)
+				id_to_instrument[sample_to_play] = tad_instrument
+			instrument.tad_instrument_for_note[note] = tad_instrument
+		if len(id_to_instrument) == 1:
+			for _ in id_to_instrument.values():
+				_.use_shortened_name = True
+				break
+	else: # Become one instrument
 		tad_instrument = TerrificInstrument(instrument)
+		tad_instrument.tracker_sample = instrument.initial_sample
+		tad_instrument.tracker_file = furnace_file
+		tad_instrument.use_shortened_name = True
 		furnace_file.tad_instruments.append(tad_instrument)
 		instrument.tad_instrument = tad_instrument
 
@@ -549,26 +568,45 @@ def FurnacePatternBlock(furnace_file, name, data, s):
 class TerrificInstrument(object):
 	def __init__(self, tracker_instrument):
 		self.tracker_instrument = tracker_instrument
-		self.name = tracker_instrument.name
+		self.lowest_used_note = None             # Furnace note index, with semitone offset applied
+		self.highest_used_note = None            # Furnace note index, with semitone offset applied
+		self.all_used_notes = set()              # All used notes, with semitone offset applied
+		self.is_used = False
+		self.use_shortened_name = False
+
+	@property
+	def name(self):
+		return self.tracker_instrument.name if self.use_shortened_name else (self.tracker_instrument.name + "_" + self.tracker_file.tracker_samples[self.tracker_sample].name)
 
 	def to_dict(self, sample_filenames):
 		d = self.tracker_instrument.to_dict(sample_filenames)
 		if d:
 			d["name"] = self.name
-			first_note = self.tracker_instrument.lowest_used_note or 12*(5+args.default_instrument_first_octave)
-			last_note  = self.tracker_instrument.highest_used_note or 12*(5+args.default_instrument_last_octave)+11
+			first_note = self.lowest_used_note or 12*(5+args.default_instrument_first_octave)
+			last_note  = self.highest_used_note or 12*(5+args.default_instrument_last_octave)+11
 			d["first_octave"] = first_note // 12 - 5
 			d["last_octave"] = last_note // 12 - 5
 		return d
 
+	def record_note_as_used(self, note):
+		if note < NoteValue.FIRST or note > NoteValue.LAST:
+			return
+		if self.lowest_used_note == None or note < self.lowest_used_note:
+			self.lowest_used_note = note
+		if self.highest_used_note == None or note > self.highest_used_note:
+			self.highest_used_note = note
+		self.all_used_notes.add(note)
+
 class TerrificSample(object):
 	def __init__(self, tracker_instrument):
 		self.tracker_instrument = tracker_instrument
-		self.notes_supported = [] # Furnace notes
+		self.note_list = []  # All used notes, with semitone offset applied
+		self.is_used = False
+		self.use_shortened_name = False
 
 	@property
 	def name(self):
-		return self.tracker_instrument.name + "_" + self.tracker_file.tracker_samples[self.tracker_sample].name
+		return self.tracker_instrument.name if self.use_shortened_name else (self.tracker_instrument.name + "_" + self.tracker_file.tracker_samples[self.tracker_sample].name)
 
 	def to_dict(self, sample_filenames):
 		d = self.tracker_instrument.to_dict(sample_filenames, sample_num=self.tracker_sample)
@@ -577,63 +615,75 @@ class TerrificSample(object):
 
 			sample = self.tracker_file.tracker_samples[self.tracker_sample]
 			sample_rates = []
-			for note in self.notes_supported:
+			for note in self.note_list:
 				sample_rates.append(round(sample.frequency_for_note(note)))
 
 			d["sample_rates"] = sample_rates
 		return d
 
+	def record_note_as_used(self, note):
+		if note < NoteValue.FIRST or note > NoteValue.LAST:
+			return
+		if note not in self.note_list:
+			self.note_list.append(note)
+
 class TrackerInstrument(object):
 	def __init__(self):
 		# Set defaults
 		self.semitone_offset = 0                 # Taken from arpeggio macro if present
-		self.use_tad_samples = False             # Use TAD samples instead of instruments
-		self.all_used_notes = set()              # All used notes, with semitone offset applied
 		self.delayed_tad_sample_creation = False # Instead of creating TAD samples at instrument parse time, create them after the song is parsed
-
 		self.note_remap = {}                     # Index is Furnace note (pre-offset), and value is Furnace note
+
 		self.tracker_sample_number_for_note = {} # Index is Furnace note (pre-offset), and value is a tracker sample number
 		self.tad_sample_for_note = {}            # Index is Furnace note (pre-offset), and value is a TerrificSample
+		self.tad_instrument_for_note = {}        # Index is Furnace note (pre-offset), and value is a TerrificInstrument
+		self.tad_instrument = None               # Single TAD instrument
+		self.tad_sample = None                   # Single TAD sample
 
-		self.lowest_used_note = None             # Furnace note index, with semitone offset applied
-		self.highest_used_note = None            # Furnace note index, with semitone offset applied
 		self.instrument_is_used = False          # True if there is a note somewhere that uses this instrument
 
-	def record_note_as_used(self, note):
-		if note < NoteValue.FIRST or note > NoteValue.LAST:
-			return
-		note += self.semitone_offset
-		self.instrument_is_used = True
-		if self.lowest_used_note == None or note < self.lowest_used_note:
-			self.lowest_used_note = note
-		if self.highest_used_note == None or note > self.highest_used_note:
-			self.highest_used_note = note
-		self.all_used_notes.add(note)
-
 	def tad_note_name_for_note(self, note, arpeggio=False):
+		instrument_or_sample = self.tad_instrument_or_sample_for_note(note)
 		note = self.note_remap.get(note, note)
-		self.record_note_as_used(note + self.semitone_offset)
+		instrument_or_sample.record_note_as_used(note + self.semitone_offset)
 
-		if self.use_tad_samples:
-			tad_sample = self.tad_sample_for_note[note]
-			note_index = tad_sample.notes_supported.index(note)
+		if isinstance(instrument_or_sample, TerrificInstrument):
+			return note_name_from_index(note, self.semitone_offset)
+		else:
+			note_index = instrument_or_sample.note_list.index(note + self.semitone_offset)
 			if arpeggio:
 				return note_name_from_index(note_index + 12*5)
 			else:
 				return "s%d," % note_index
+
+	def tad_instrument_or_sample_for_note(self, note):
+		if self.tad_sample_for_note:
+			sample = self.tad_sample_for_note[note]
+			sample.is_used = True
+			return sample
+		elif self.tad_instrument_for_note:
+			instrument = self.tad_instrument_for_note[note]
+			instrument.is_used = True
+			return instrument
+		elif self.tad_sample:
+			sample = self.tad_sample
+			sample.is_used = True
+			return sample
 		else:
-			return note_name_from_index(note, self.semitone_offset)
+			instrument = self.tad_instrument
+			instrument.is_used = True
+			return instrument
 
 	def tad_instrument_name_for_note(self, note):
-		if self.use_tad_samples:
-			tad_sample = self.tad_sample_for_note[note]
-			return tad_sample.name
-		else:
-			return self.tad_instrument.name
+		return self.tad_instrument_or_sample_for_note(note).name
 
 	def get_all_tad_instrument_names(self):
-		if self.use_tad_samples:
-			return set(_.name for _ in self.tad_sample_for_note.values() if _ != None)
+		if self.tad_sample_for_note:
+			return set(_.name for _ in self.tad_sample_for_note.values() if _ != None and _.is_used)
+		elif self.tad_instrument_for_note:
+			return set(_.name for _ in self.tad_instrument_for_note.values() if _ != None and _.is_used)
+		elif self.tad_sample:
+			return (self.tad_sample.name,)
 		else:
 			return (self.tad_instrument.name,)
 
@@ -1183,8 +1233,8 @@ class TrackerSong(object):
 				combined_patterns[channel].rows.append(note)
 				if note.instrument != None:
 					current_instrument_index[channel] = note.instrument
-				if current_instrument_index[channel] != None and note.note:
-					self.furnace_file.tracker_instruments[current_instrument_index[channel]].record_note_as_used(note.note)
+				if note.note != None and current_instrument_index[channel] != None:
+					self.furnace_file.tracker_instruments[current_instrument_index[channel]].tad_instrument_or_sample_for_note(note.note)
 
 				this_row_effects = set()
 				for effect_index, effect_data in enumerate(note.effects):
@@ -1283,19 +1333,6 @@ class TrackerSong(object):
 					for effect_type in EFFECTS_WITH_IT_AUTO_CANCEL.union( set((0x80,)) ):
 						if effect_type in effects_used_by_channel[channel] and effect_type not in effect_types_at_loop_point:
 							combined_patterns[channel].rows[loop_point].effects.append(IT_EFFECT_CANCEL_OVERRIDE.get(effect_type, (effect_type, 0)) )
-
-		# Generate TAD samples late for instruments that were marked with "!sample"
-		for instrument in self.furnace_file.tracker_instruments:
-			if instrument.delayed_tad_sample_creation:
-				tad_sample = TerrificSample(instrument)
-				tad_sample.tracker_sample = instrument.initial_sample
-				tad_sample.tracker_file = self.furnace_file
-				tad_sample.notes_supported = list(instrument.all_used_notes)
-				self.furnace_file.tad_samples.append(tad_sample)
-				instrument.delayed_tad_sample_creation = False
-				for note in instrument.all_used_notes:
-					instrument.tad_sample_for_note[note] = tad_sample
-				instrument.use_tad_samples = True
 
 		out = ""
 		if hasattr(self, 'name') and self.name:
@@ -1477,10 +1514,14 @@ if __name__ == "__main__":
 		# Write the instruments and samples
 		brrs = glob.glob(os.path.join(args.project_folder, '*.brr'))
 		for instrument in fur_file.tad_instruments:
+			if not instrument.is_used:
+				continue
 			d = instrument.to_dict(brrs)
 			if d != None:
 				project["instruments"].append(d)
 		for sample in fur_file.tad_samples:
+			if not sample.is_used:
+				continue
 			d = sample.to_dict(brrs)
 			if d != None:
 				project["samples"].append(d)
