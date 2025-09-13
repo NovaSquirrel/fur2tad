@@ -52,12 +52,44 @@ class ImpulseTrackerInstrumentSampleMixin(object):
 					"source": wav_basename,
 					"freq": tuning_freq,
 					"loop": "loop_with_filter" if sample.flags_looped else "none",
-					"envelope": "gain F127",
+					"envelope": self.envelope,
 				}
 				if sample.flags_looped:
 					instrument_entry["loop_setting"] = 0
 				return instrument_entry
 		return None
+
+	def apply_commands_from_name(self, filename):
+		self.envelope = "gain F127"
+		self.become_tad_sample = False
+
+		if not filename.startswith("!"):
+			return
+
+		i = 1
+		command_mode = False
+		while i < len(filename):
+			next_i = i+1
+			command = filename[i]
+			if command == 's':
+				self.become_tad_sample = True
+			elif command == 'g':
+				self.envelope = "gain " + filename[next_i]
+				next_i += 1
+				while next_i < len(filename) and filename[next_i].isdigit():
+					self.envelope += filename[next_i]
+					next_i += 1
+			elif command == 'a':
+				attack  = int(filename[next_i+0], 16)
+				decay   = int(filename[next_i+1], 16)
+				sustain = int(filename[next_i+2], 16)
+				release = int(filename[next_i+3:next_i+5], 16)
+				self.envelope = "adsr %d %d %d %d" % (attack, decay, sustain, release)
+				next_i += 5
+			else:
+				print("Unrecognized instrument name command:", command)
+				return
+			i = next_i
 
 class ImpulseTrackerInstrument(ImpulseTrackerInstrumentSampleMixin, TrackerInstrument):
 	def __init__(self):
@@ -166,7 +198,8 @@ class ImpulseTrackerFile(object):
 			sample = ImpulseTrackerSample()
 			s.seek(sample_offsets[sample_number])
 			magic = s.read(4)
-			sample.dos_filename = s.read(12)
+			sample.dos_filename = s.read(12).decode().replace(chr(0), "")
+			sample.apply_commands_from_name(sample.dos_filename)
 			s.read(1) # Reserved
 			sample.global_volume  = bytes_to_int(s.read(1))
 			sample.flags          = bytes_to_int(s.read(1))
@@ -218,7 +251,8 @@ class ImpulseTrackerFile(object):
 			instrument = ImpulseTrackerInstrument()
 			s.seek(instrument_offsets[instrument_number])
 			magic = s.read(4)
-			instrument.dos_filename = s.read(12)
+			instrument.dos_filename = s.read(12).decode().replace(chr(0), "")
+			instrument.apply_commands_from_name(instrument.dos_filename)
 			s.read(1) # Reserved
 			instrument.new_note_action = bytes_to_int(s.read(1))
 			instrument.duplicate_check_type = bytes_to_int(s.read(1))
@@ -246,11 +280,13 @@ class ImpulseTrackerFile(object):
 
 			# Parse the sample map
 			instrument.sample_map = []
+			instrument.note_remap = {}
 			for i in range(120):
-				note_to_play   = bytes_to_int(s.read(1))
+				note_to_play   = bytes_to_int(s.read(1)) + 12*5
 				sample_to_play = bytes_to_int(s.read(1))
 				instrument.sample_map.append((note_to_play, sample_to_play))
-
+				instrument.note_remap[i + 12*5] = note_to_play
+			all_samples_are_the_same = all(_[1] == instrument.sample_map[0][1] for _ in instrument.sample_map)
 			instrument.sample_number = instrument.sample_map[0][1] - 1
 			instrument.sample = samples[instrument.sample_number]
 

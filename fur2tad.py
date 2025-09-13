@@ -329,7 +329,7 @@ def FurnaceSampleBlock(furnace_file, name, data, s):
 	sample.is_brr = sample.depth == 9
 
 	if not sample.is_brr:
-		print("Sample %s is not in BRR format")
+		print("Sample %s is not in BRR format" % sample.name)
 
 instrument_counter = 0
 @block_handler("INS2")
@@ -344,11 +344,11 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 	furnace_file.tracker_instruments.append(instrument)
 	instrument.furnace_file = furnace_file
 
-	# Defaults
-	instrument.use_sample_map = False
-	instrument.auto_generate_sample_map = False
-	instrument.sample_map_is_remap_only = False
+	# State from parsing the instrument
+	override_as_sample = False
+	override_as_instrument = False
 
+	# Defaults
 	while True:
 		feature = s.read(2)
 		if len(feature) == 0 or feature == b'EN':
@@ -360,13 +360,17 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 
 		if feature == b'NA':
 			instrument_name = read_string(sf)
+
+			# Process commands in the name
 			if "!sample" in instrument_name:
 				instrument_name = instrument_name.replace("!sample", "")
-				instrument.auto_generate_sample_map = True
+				instrument.delayed_tad_sample_creation = True
+				override_as_sample = True
 			if "!remap" in instrument_name:
 				instrument_name = instrument_name.replace("!remap", "")
-				instrument.sample_map_is_remap_only = True
+				override_as_instrument = True
 
+			# Clean up the instrument name
 			instrument.name = make_alphanumeric(instrument_name.strip())
 			if args.remove_instrument_names:
 				instrument.name = "instrument%d" % instrument_counter
@@ -374,20 +378,22 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 		elif feature == b'SM':
 			instrument.initial_sample = bytes_to_int(sf.read(2))
 			b = bytes_to_int(sf.read(1)) # flags
-			instrument.use_sample_map = bool(b&1)
-			instrument.use_sample     = bool(b&2)
-			instrument.use_wave       = bool(b&4)
+			use_sample_map             = bool(b&1)
+			instrument.use_sample      = bool(b&2)
+			instrument.use_wave        = bool(b&4)
 			instrument.waveform_length = bytes_to_int(sf.read(1))
-			if instrument.use_sample_map:
-				instrument.sample_map = []
+			if use_sample_map:
 				for i in range(120):
-					note_to_play   = bytes_to_int(sf.read(2))
+					note_to_play   = bytes_to_int(sf.read(2)) + 12*5
 					sample_to_play = bytes_to_int(sf.read(2))
-					instrument.sample_map.append((note_to_play, sample_to_play))
+					if sample_to_play == 65535:
+						continue
+					instrument.note_remap[i + 12*5] = note_to_play
+					instrument.tracker_sample_number_for_note[i + 12*5] = sample_to_play
 		elif feature == b'SN':
 			b = bytes_to_int(sf.read(1)) # attack/decay
+			instrument.decay    = (b >> 4) & 7
 			instrument.attack   = b & 15
-			instrument.decay    = (b >> 4) & 15
 
 			b = bytes_to_int(sf.read(1)) # sustain/release
 			instrument.sustain  = (b >> 5) & 7
@@ -452,29 +458,15 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 				break
 
 	# Create a TAD instrument or sample from this
-	if instrument.auto_generate_sample_map and instrument.use_sample_map and not instrument.sample_map_is_remap_only:
-		instrument.auto_generate_sample_map = False
-	if instrument.auto_generate_sample_map:
-		return
-	elif instrument.use_sample_map and instrument.sample_map_is_remap_only:
-		instrument.notes_remap = {}
-		for i, data in enumerate(instrument.sample_map):
-			note_to_play, sample_to_play = data
-			note_to_play += 12*5
-			instrument.notes_remap[i + 12*5] = note_to_play
-		instrument.use_sample_map = False
-
-		tad_instrument = TerrificInstrument(instrument)
-		furnace_file.tad_instruments.append(tad_instrument)
-		instrument.tad_instrument = tad_instrument
-	elif instrument.use_sample_map and not instrument.sample_map_is_remap_only:
-		instrument.tad_sample_map = {}
+	if instrument.delayed_tad_sample_creation:
+		if instrument.note_remap: # If there's a sample map
+			instrument.delayed_tad_sample_creation = False
+		else:
+			return
+	if instrument.note_remap and not override_as_instrument:
 		id_to_sample = {}
-		for i, data in enumerate(instrument.sample_map):
-			note_to_play, sample_to_play = data
-			note_to_play += 12*5
-			if sample_to_play == 65535:
-				continue
+
+		for note, sample_to_play in instrument.tracker_sample_number_for_note.items():
 			if sample_to_play in id_to_sample:
 				tad_sample = id_to_sample[sample_to_play]
 			else:
@@ -484,12 +476,12 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 				tad_sample.notes_supported = set()
 				furnace_file.tad_samples.append(tad_sample)
 				id_to_sample[sample_to_play] = tad_sample
-			instrument.tad_sample_map[i + 12*5] = tad_sample
-			tad_sample.note_remap[i + 12*5] = note_to_play
-			tad_sample.notes_supported.add(note_to_play)
+			instrument.tad_sample_for_note[note] = tad_sample
+			tad_sample.notes_supported.add(instrument.note_remap[note])
 
 		for sample in id_to_sample.values():
 			sample.notes_supported = list(sample.notes_supported)
+		instrument.use_tad_samples = True
 	else:
 		tad_instrument = TerrificInstrument(instrument)
 		furnace_file.tad_instruments.append(tad_instrument)
@@ -563,8 +555,8 @@ class TerrificInstrument(object):
 		d = self.tracker_instrument.to_dict(sample_filenames)
 		if d:
 			d["name"] = self.name
-			first_note = self.tracker_instrument.lowest_used_note if hasattr(self.tracker_instrument, "lowest_used_note") else 12*(5+args.default_instrument_first_octave)
-			last_note  = self.tracker_instrument.highest_used_note if hasattr(self.tracker_instrument, "highest_used_note") else 12*(5+args.default_instrument_last_octave)+11
+			first_note = self.tracker_instrument.lowest_used_note or 12*(5+args.default_instrument_first_octave)
+			last_note  = self.tracker_instrument.highest_used_note or 12*(5+args.default_instrument_last_octave)+11
 			d["first_octave"] = first_note // 12 - 5
 			d["last_octave"] = last_note // 12 - 5
 		return d
@@ -572,7 +564,6 @@ class TerrificInstrument(object):
 class TerrificSample(object):
 	def __init__(self, tracker_instrument):
 		self.tracker_instrument = tracker_instrument
-		self.note_remap = {} # Index is Furnace note, and value is Furnace note
 		self.notes_supported = [] # Furnace notes
 
 	@property
@@ -595,59 +586,66 @@ class TerrificSample(object):
 class TrackerInstrument(object):
 	def __init__(self):
 		# Set defaults
-		self.semitone_offset = 0
-		self.use_sample_map = False
-		self.sample_map_is_remap_only = False
-		self.all_used_notes = set()
+		self.semitone_offset = 0                 # Taken from arpeggio macro if present
+		self.use_tad_samples = False             # Use TAD samples instead of instruments
+		self.all_used_notes = set()              # All used notes, with semitone offset applied
+		self.delayed_tad_sample_creation = False # Instead of creating TAD samples at instrument parse time, create them after the song is parsed
+
+		self.note_remap = {}                     # Index is Furnace note (pre-offset), and value is Furnace note
+		self.tracker_sample_number_for_note = {} # Index is Furnace note (pre-offset), and value is a tracker sample number
+		self.tad_sample_for_note = {}            # Index is Furnace note (pre-offset), and value is a TerrificSample
+
+		self.lowest_used_note = None             # Furnace note index, with semitone offset applied
+		self.highest_used_note = None            # Furnace note index, with semitone offset applied
+		self.instrument_is_used = False          # True if there is a note somewhere that uses this instrument
 
 	def record_note_as_used(self, note):
 		if note < NoteValue.FIRST or note > NoteValue.LAST:
 			return
 		note += self.semitone_offset
-		if not hasattr(self, "instrument_is_used"):
-			self.instrument_is_used = True
-		if not hasattr(self, "lowest_used_note"):
+		self.instrument_is_used = True
+		if self.lowest_used_note == None or note < self.lowest_used_note:
 			self.lowest_used_note = note
-		if note < self.lowest_used_note:
-			self.lowest_used_note = note
-		if not hasattr(self, "highest_used_note"):
-			self.highest_used_note = note
-		if note > self.highest_used_note:
+		if self.highest_used_note == None or note > self.highest_used_note:
 			self.highest_used_note = note
 		self.all_used_notes.add(note)
 
 	def tad_note_name_for_note(self, note, arpeggio=False):
-		if self.use_sample_map:
-			tad_sample = self.tad_sample_map[note]
-			note = tad_sample.note_remap[note]
+		note = self.note_remap.get(note, note)
+		self.record_note_as_used(note + self.semitone_offset)
+
+		if self.use_tad_samples:
+			tad_sample = self.tad_sample_for_note[note]
 			note_index = tad_sample.notes_supported.index(note)
 			if arpeggio:
 				return note_name_from_index(note_index + 12*5)
 			else:
 				return "s%d," % note_index
 		else:
-			if hasattr(self, "notes_remap"):
-				note = self.notes_remap[note]
-			self.record_note_as_used(note)
 			return note_name_from_index(note, self.semitone_offset)
 
 	def tad_instrument_name_for_note(self, note):
-		if self.use_sample_map:
-			tad_sample = self.tad_sample_map[note]
+		if self.use_tad_samples:
+			tad_sample = self.tad_sample_for_note[note]
 			return tad_sample.name
 		else:
 			return self.tad_instrument.name
 
 	def get_all_tad_instrument_names(self):
-		if self.use_sample_map:
-			return set(_.name for _ in self.tad_sample_map.values() if _ != None)
+		if self.use_tad_samples:
+			return set(_.name for _ in self.tad_sample_for_note.values() if _ != None)
 		else:
 			return (self.tad_instrument.name,)
 
 class FurnaceInstrument(TrackerInstrument):
 	def __init__(self):
 		super().__init__()
+
+		# Defaults
 		self.initial_sample = 0
+		self.envelope_on = False
+		self.gain_mode = None
+		self.gain = None
 
 	def to_dict(self, sample_filenames, sample_num=None):
 		sample_num = self.initial_sample if sample_num == None else sample_num
@@ -668,10 +666,10 @@ class FurnaceInstrument(TrackerInstrument):
 					"envelope": "gain F127",
 				}
 
-				if hasattr(self, "envelope_on") and self.envelope_on:
+				if self.envelope_on:
 					instrument_entry["envelope"] = "adsr %d %d %d %d" % (self.attack, self.decay, self.sustain, self.release)
 				else:
-					if hasattr(self, "gain_mode"):
+					if self.gain_mode != None:
 						if self.gain_mode == 0: # Direct
 							instrument_entry["envelope"] = "gain F%d" % self.gain
 						elif self.gain_mode == 4: # Decreasing
@@ -1288,18 +1286,16 @@ class TrackerSong(object):
 
 		# Generate TAD samples late for instruments that were marked with "!sample"
 		for instrument in self.furnace_file.tracker_instruments:
-			if instrument.auto_generate_sample_map:
+			if instrument.delayed_tad_sample_creation:
 				tad_sample = TerrificSample(instrument)
 				tad_sample.tracker_sample = instrument.initial_sample
 				tad_sample.tracker_file = self.furnace_file
 				tad_sample.notes_supported = list(instrument.all_used_notes)
 				self.furnace_file.tad_samples.append(tad_sample)
-				instrument.auto_generate_sample_map = False
-				instrument.tad_sample_map = {}
+				instrument.delayed_tad_sample_creation = False
 				for note in instrument.all_used_notes:
-					instrument.tad_sample_map[note] = tad_sample
-					tad_sample.note_remap[note] = note
-				instrument.use_sample_map = True
+					instrument.tad_sample_for_note[note] = tad_sample
+				instrument.use_tad_samples = True
 
 		out = ""
 		if hasattr(self, 'name') and self.name:

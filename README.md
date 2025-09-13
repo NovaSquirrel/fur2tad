@@ -102,3 +102,13 @@ Some Impules Tracker features that are not supported:
 * Sample map
 * Instrument loop points that are not at the start of the sample (could be added later)
 * Instrument envelopes (instruments will use `gain F127`)
+
+## Metadata in Impulse Tracker instrument names
+When a filename starts with `!`, the converter will look for special commands on an instrument or sample's "filename" field. This field has a very short maximum length, so the commands are very compact.
+
+After the `!`, the following commands can be used:
+* `aADSRR`: Set up the SNES ADSR envelope. Provide the four numbers in hexadecimal format, with the last parameter being two digits because it ranges from 00 to 1F. See [TAD's documentation](https://github.com/undisbeliever/terrific-audio-driver/blob/main/docs/samples.md#adsr).
+* `gF127`: Choose a SNES GAIN setting. After the `g`, enter a GAIN value as described in [TAD's documentation](https://github.com/undisbeliever/terrific-audio-driver/blob/main/docs/samples.md#gain).
+* `s`: This instrument should become a Terrific Audio Driver sample, not an instrument. This command doesn't take a parameter.
+
+The default envelope is `gain F127`.
