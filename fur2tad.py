@@ -1519,13 +1519,13 @@ if __name__ == "__main__":
 		# Write the instruments and samples
 		brrs = glob.glob(os.path.join(args.project_folder, '*.brr'))
 		for instrument in fur_file.tad_instruments:
-			if not instrument.is_used:
+			if not instrument.is_used and not args.keep_all_instruments:
 				continue
 			d = instrument.to_dict(brrs)
 			if d != None:
 				project["instruments"].append(d)
 		for sample in fur_file.tad_samples:
-			if not sample.is_used:
+			if not sample.is_used and not args.keep_all_instruments:
 				continue
 			d = sample.to_dict(brrs)
 			if d != None:

@@ -577,10 +577,14 @@ if args.project_folder:
 	# Write the instruments
 	wavs = glob.glob(os.path.join(args.project_folder, '*.wav'))
 	for instrument in it_file.tad_instruments:
+		if not instrument.is_used and not args.keep_all_instruments:
+			continue
 		d = instrument.to_dict(wavs)
 		if d != None:
 			project["instruments"].append(d)
 	for sample in it_file.tad_samples:
+		if not sample.is_used and not args.keep_all_instruments:
+			continue
 		d = sample.to_dict(wavs)
 		if d != None:
 			project["samples"].append(d)
