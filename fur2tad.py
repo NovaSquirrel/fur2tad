@@ -488,7 +488,7 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 			if sample_to_play in id_to_instrument:
 				tad_instrument = id_to_instrument[sample_to_play]
 			else:
-				tad_instrument = TerrificSample(instrument)
+				tad_instrument = TerrificInstrument(instrument)
 				tad_instrument.tracker_sample = sample_to_play
 				tad_instrument.tracker_file = furnace_file
 				furnace_file.tad_instruments.append(tad_instrument)
@@ -579,7 +579,7 @@ class TerrificInstrument(object):
 		return self.tracker_instrument.name if self.use_shortened_name else (self.tracker_instrument.name + "_" + self.tracker_file.tracker_samples[self.tracker_sample].name)
 
 	def to_dict(self, sample_filenames):
-		d = self.tracker_instrument.to_dict(sample_filenames)
+		d = self.tracker_instrument.to_dict(sample_filenames, sample_num=self.tracker_sample)
 		if d:
 			d["name"] = self.name
 			first_note = self.lowest_used_note or 12*(5+args.default_instrument_first_octave)
@@ -657,6 +657,8 @@ class TrackerInstrument(object):
 				return "s%d," % note_index
 
 	def tad_instrument_or_sample_for_note(self, note):
+		if note < NoteValue.FIRST or note > NoteValue.LAST:
+			return None
 		if self.tad_sample_for_note:
 			sample = self.tad_sample_for_note[note]
 			sample.is_used = True
@@ -675,13 +677,16 @@ class TrackerInstrument(object):
 			return instrument
 
 	def tad_instrument_name_for_note(self, note):
-		return self.tad_instrument_or_sample_for_note(note).name
+		ref = self.tad_instrument_or_sample_for_note(note)
+		if ref == None:
+			return None
+		return ref.name
 
 	def get_all_tad_instrument_names(self):
 		if self.tad_sample_for_note:
-			return set(_.name for _ in self.tad_sample_for_note.values() if _ != None and _.is_used)
+			return set(_.name for _ in self.tad_sample_for_note.values() if _ != None)# and _.is_used)
 		elif self.tad_instrument_for_note:
-			return set(_.name for _ in self.tad_instrument_for_note.values() if _ != None and _.is_used)
+			return set(_.name for _ in self.tad_instrument_for_note.values() if _ != None)# and _.is_used)
 		elif self.tad_sample:
 			return (self.tad_sample.name,)
 		else:
@@ -744,10 +749,6 @@ class TrackerSample(object):
 	def __init__(self):
 		pass
 
-class FurnaceSample(TrackerSample):
-	def __init__(self):
-		super().__init__()
-
 	def frequency_for_note(self, note):
 		c4_rate = self.c4_rate
 		c4_note = (12*5) + 12*4
@@ -759,6 +760,10 @@ class FurnaceSample(TrackerSample):
 		elif note_difference > 0:
 			return c4_rate * (twelfth_root_of_2 ** note_difference)
 		return c4_rate / (twelfth_root_of_2 ** (-note_difference))
+
+class FurnaceSample(TrackerSample):
+	def __init__(self):
+		super().__init__()
 
 class FurnaceNote(object):
 	def __init__(self):
@@ -928,7 +933,7 @@ class FurnacePattern(object):
 				current_instrument_ref = song.furnace_file.tracker_instruments[current_instrument_num]
 			if current_instrument_ref:
 				instrument_name = current_instrument_ref.tad_instrument_name_for_note(most_recent_note)
-				if instrument_name != current_instrument_name:
+				if instrument_name != current_instrument_name and instrument_name != None:
 					current_instrument_name = instrument_name
 					out.append("@%s" % current_instrument_name)
 

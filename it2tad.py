@@ -29,22 +29,20 @@ from fur2tad import *
 IT_EFFECT_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ#\\" # 0x01 through 0x1C
 
 class ImpulseTrackerInstrumentSampleMixin(object):
-	def to_dict(self, sample_filenames):
+	def to_dict(self, sample_filenames, sample_num=None):
 		if hasattr(self, "sample"):
-			look_for = "%.2d - " % (self.tracker_sample+1)
-			sample = self.sample
+			look_for = "%.2d - " % (sample_num+1)
 		else:
-			look_for = "%.2d - " % (self.tracker_sample+1)
-			sample = self
+			look_for = "%.2d - " % (sample_num+1)
+		sample = self.tracker_file.tracker_samples[sample_num]
 
 		for filename in sample_filenames:
-			brr_basename = os.path.basename(filename)
-			if brr_basename.startswith(look_for):
-				c5_rate = sample.c5_rate
+			wav_basename = os.path.basename(filename)
+			if wav_basename.startswith(look_for):
+				c4_rate = sample.c4_rate
 
-				bytes_per_sample_point = 2 if sample.flags_is_16bit else 1
-				c5_freq = 261.626
-				wavelength = (c5_rate / bytes_per_sample_point) / c5_freq
+				c4_freq = 261.626
+				wavelength = c4_rate / c4_freq
 				tuning_freq = 32000 / wavelength
 
 				instrument_entry = {
@@ -57,6 +55,7 @@ class ImpulseTrackerInstrumentSampleMixin(object):
 				if sample.flags_looped:
 					instrument_entry["loop_setting"] = 0
 				return instrument_entry
+		print("Couldn't find file for sample number %d" % (sample_num+1))
 		return None
 
 	def apply_commands_from_name(self, filename):
@@ -93,11 +92,33 @@ class ImpulseTrackerInstrumentSampleMixin(object):
 
 class ImpulseTrackerInstrument(ImpulseTrackerInstrumentSampleMixin, TrackerInstrument):
 	def __init__(self):
-		super().__init__()
+		# Set defaults
+		self.semitone_offset = 0                 # Taken from arpeggio macro if present
+		self.delayed_tad_sample_creation = False # Instead of creating TAD samples at instrument parse time, create them after the song is parsed
+		self.note_remap = {}                     # Index is Furnace note (pre-offset), and value is Furnace note
 
-class ImpulseTrackerSample(ImpulseTrackerInstrumentSampleMixin, TrackerInstrument):
+		self.tracker_sample_number_for_note = {} # Index is Furnace note (pre-offset), and value is a tracker sample number
+		self.tad_sample_for_note = {}            # Index is Furnace note (pre-offset), and value is a TerrificSample
+		self.tad_instrument_for_note = {}        # Index is Furnace note (pre-offset), and value is a TerrificInstrument
+		self.tad_instrument = None               # Single TAD instrument
+		self.tad_sample = None                   # Single TAD sample
+
+		self.instrument_is_used = False          # True if there is a note somewhere that uses this instrument
+
+class ImpulseTrackerSample(TrackerSample, ImpulseTrackerInstrumentSampleMixin, TrackerInstrument):
 	def __init__(self):
-		super().__init__()
+		# Set defaults
+		self.semitone_offset = 0                 # Taken from arpeggio macro if present
+		self.delayed_tad_sample_creation = False # Instead of creating TAD samples at instrument parse time, create them after the song is parsed
+		self.note_remap = {}                     # Index is Furnace note (pre-offset), and value is Furnace note
+
+		self.tracker_sample_number_for_note = {} # Index is Furnace note (pre-offset), and value is a tracker sample number
+		self.tad_sample_for_note = {}            # Index is Furnace note (pre-offset), and value is a TerrificSample
+		self.tad_instrument_for_note = {}        # Index is Furnace note (pre-offset), and value is a TerrificInstrument
+		self.tad_instrument = None               # Single TAD instrument
+		self.tad_sample = None                   # Single TAD sample
+
+		self.instrument_is_used = False          # True if there is a note somewhere that uses this instrument
 
 class ImpulseTrackerFile(object):
 	def __init__(self, filename):
@@ -222,7 +243,9 @@ class ImpulseTrackerFile(object):
 			sample.sample_length  = bytes_to_int(s.read(4))
 			sample.loop_beginning = bytes_to_int(s.read(4))
 			sample.loop_end       = bytes_to_int(s.read(4))
-			sample.c5_rate        = bytes_to_int(s.read(4))
+			sample.c4_rate        = bytes_to_int(s.read(4))
+			if sample.flags_is_16bit: # IT sample rate is in bytes, whereas sample.c4_rate is in samples
+				sample.c4_rate /= 2
 			sample.sustain_beginning = bytes_to_int(s.read(4))
 			sample.sustain_end    = bytes_to_int(s.read(4))
 			sample.sample_pointer = bytes_to_int(s.read(4))
@@ -238,6 +261,7 @@ class ImpulseTrackerFile(object):
 					break
 
 			sample.tracker_sample = sample_number
+			sample.tracker_file = self
 			self.tracker_samples.append(sample)
 
 		###################################################
@@ -275,18 +299,15 @@ class ImpulseTrackerFile(object):
 					break
 
 			# Parse the sample map
-			instrument.sample_map = []
-			instrument.note_remap = {}
 			for i in range(120):
 				note_to_play   = bytes_to_int(s.read(1)) + 12*5
 				sample_to_play = bytes_to_int(s.read(1))
-				instrument.sample_map.append((note_to_play, sample_to_play))
+				if sample_to_play == 0:
+					continue
+				instrument.tracker_sample_number_for_note[i + 12*5] = sample_to_play - 1
 				instrument.note_remap[i + 12*5] = note_to_play
-			all_samples_are_assigned = all(_[1] != 0 for _ in instrument.sample_map)
-			all_samples_are_the_same = all(_[1] == instrument.sample_map[0][1] for _ in instrument.sample_map)
-			instrument.tracker_sample = instrument.sample_map[0][1] - 1
-			instrument.sample = self.tracker_samples[instrument.tracker_sample]
 
+			instrument.tracker_file = self
 			self.tracker_instruments.append(instrument)
 
 		###################################################
@@ -470,12 +491,48 @@ class ImpulseTrackerFile(object):
 
 		if not self.use_instruments:
 			self.tracker_instruments = self.tracker_samples
-		for instrument in self.tracker_instruments:
-			tad_instrument = TerrificInstrument(instrument)
-			tad_instrument.tracker_sample = instrument.tracker_sample
-			tad_instrument.tracker_file = self
-			self.tad_instruments.append(tad_instrument)
-			instrument.tad_instrument = tad_instrument
+			for instrument in self.tracker_instruments:
+				tad_instrument = TerrificInstrument(instrument)
+				tad_instrument.tracker_sample = instrument.tracker_sample
+				tad_instrument.tracker_file = self
+				self.tad_instruments.append(tad_instrument)
+				instrument.tad_instrument = tad_instrument
+		else:
+			for instrument in self.tracker_instruments:
+				if instrument.become_tad_sample:
+					id_to_sample = {}
+
+					for note, sample_to_play in instrument.tracker_sample_number_for_note.items():
+						if sample_to_play in id_to_sample:
+							tad_sample = id_to_sample[sample_to_play]
+						else:
+							tad_sample = TerrificSample(instrument)
+							tad_sample.tracker_sample = sample_to_play
+							tad_sample.tracker_file = self
+							self.tad_samples.append(tad_sample)
+							id_to_sample[sample_to_play] = tad_sample
+						instrument.tad_sample_for_note[note] = tad_sample
+					if len(id_to_sample) == 1:
+						for _ in id_to_sample.values():
+							_.use_shortened_name = True
+							break
+				else:
+					id_to_instrument = {}
+
+					for note, sample_to_play in instrument.tracker_sample_number_for_note.items():
+						if sample_to_play in id_to_instrument:
+							tad_instrument = id_to_instrument[sample_to_play]
+						else:
+							tad_instrument = TerrificInstrument(instrument)
+							tad_instrument.tracker_sample = sample_to_play
+							tad_instrument.tracker_file = self
+							self.tad_instruments.append(tad_instrument)
+							id_to_instrument[sample_to_play] = tad_instrument
+						instrument.tad_instrument_for_note[note] = tad_instrument
+					if len(id_to_instrument) == 1:
+						for _ in id_to_instrument.values():
+							_.use_shortened_name = True
+							break
 
 		#print(song.patterns[0][0].rows)
 
@@ -523,7 +580,7 @@ if args.project_folder:
 		if d != None:
 			project["instruments"].append(d)
 	for sample in it_file.tad_samples:
-		d = sample.to_dict(brrs)
+		d = sample.to_dict(wavs)
 		if d != None:
 			project["samples"].append(d)
 
