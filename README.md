@@ -109,6 +109,6 @@ When a filename starts with `!`, the converter will look for special commands on
 After the `!`, the following commands can be used:
 * `aADSRR`: Set up the SNES ADSR envelope. Provide the four numbers in hexadecimal format, with the last parameter being two digits because it ranges from 00 to 1F. See [TAD's documentation](https://github.com/undisbeliever/terrific-audio-driver/blob/main/docs/samples.md#adsr).
 * `gF127`: Choose a SNES GAIN setting. After the `g`, enter a GAIN value as described in [TAD's documentation](https://github.com/undisbeliever/terrific-audio-driver/blob/main/docs/samples.md#gain).
-* `s`: This instrument should become a Terrific Audio Driver sample, not an instrument. This command doesn't take a parameter.
+* `s`: This instrument should become a Terrific Audio Driver sample, not an instrument. This command doesn't take a parameter. Because IT instruments always have sample maps, the converter can't choose different behavior based on the presence or absence of a sample map, so they will always become TAD instruments unless specified otherwise with this command.
 
 The default envelope is `gain F127`.

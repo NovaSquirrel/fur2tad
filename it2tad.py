@@ -495,6 +495,7 @@ class ImpulseTrackerFile(object):
 				tad_instrument = TerrificInstrument(instrument)
 				tad_instrument.tracker_sample = instrument.tracker_sample
 				tad_instrument.tracker_file = self
+				tad_instrument.use_shortened_name = True
 				self.tad_instruments.append(tad_instrument)
 				instrument.tad_instrument = tad_instrument
 		else:
