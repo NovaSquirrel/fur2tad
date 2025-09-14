@@ -97,9 +97,8 @@ Impulse Tracker effects are converted into Furnace effects; not all Furnace effe
 * `X` --> `80` (Pan)
 * `Y` --> `84` (Panbrello) - not supported by MML converter yet
 
-Some Impules Tracker features that are not supported:
+Some Impulse Tracker features that are not supported:
 * New note actions
-* Sample map
 * Instrument loop points that are not at the start of the sample (could be added later)
 * Instrument envelopes (instruments will use `gain F127`)
 
