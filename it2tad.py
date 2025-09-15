@@ -37,7 +37,12 @@ class ImpulseTrackerInstrumentSampleMixin(object):
 		sample = self.tracker_file.tracker_samples[sample_num]
 
 		for filename in sample_filenames:
-			wav_basename = os.path.basename(filename)
+			filename_to_use = filename
+			brr_filename = os.path.splitext(filename)[0]+'.brr'
+			if os.path.exists(brr_filename):
+				filename_to_use = brr_filename
+
+			wav_basename = os.path.basename(filename_to_use)
 			if wav_basename.startswith(look_for):
 				c4_rate = sample.c4_rate
 
@@ -94,6 +99,7 @@ class ImpulseTrackerInstrument(ImpulseTrackerInstrumentSampleMixin, TrackerInstr
 	def __init__(self):
 		# Set defaults
 		self.semitone_offset = 0                 # Taken from arpeggio macro if present
+		self.volume_scale = 1                    # Stacks on top of note volume and envelope volume
 		self.delayed_tad_sample_creation = False # Instead of creating TAD samples at instrument parse time, create them after the song is parsed
 		self.note_remap = {}                     # Index is Furnace note (pre-offset), and value is Furnace note
 
@@ -109,6 +115,7 @@ class ImpulseTrackerSample(TrackerSample, ImpulseTrackerInstrumentSampleMixin, T
 	def __init__(self):
 		# Set defaults
 		self.semitone_offset = 0                 # Taken from arpeggio macro if present
+		self.volume_scale = 1                    # Stacks on top of note volume and envelope volume
 		self.delayed_tad_sample_creation = False # Instead of creating TAD samples at instrument parse time, create them after the song is parsed
 		self.note_remap = {}                     # Index is Furnace note (pre-offset), and value is Furnace note
 
