@@ -914,6 +914,10 @@ class FurnacePattern(object):
 			if note.note != None:
 				most_recent_note = note.note
 
+			# Reset for each note
+			delayed_note_ticks = 0
+			delayed_cut_ticks = 0
+
 			# Find next note
 			next_index = find_next_note_with(lambda _:not _.is_empty())
 			if loop_point:
@@ -1098,10 +1102,22 @@ class FurnacePattern(object):
 					vibrato_range = effect_value
 				elif effect_type == 0xEA: # Legato
 					legato = bool(effect_value)
+				elif effect_type == 0xEC: # Delayed cut
+					delayed_cut_ticks = effect_value
+				elif effect_type == 0xED: # Delayed note
+					delayed_note_ticks = effect_value
 				elif effect_type == 0xF8: # Single tick volume up
 					out.append("V+%d" % (effect_value*2))
 				elif effect_type == 0xF9: # Single tick volume down
 					out.append("V-%d" % (effect_value*2))
+
+			# Simple version of EDxx
+			# In the future it should probably try to move the previous note's key off forward
+			if delayed_note_ticks:
+				delayed_note_tad_ticks = furnace_ticks_to_tad_ticks(delayed_note_ticks, furnace_ticks_per_second, tad_timer_value)
+				if duration_in_tad_ticks > delayed_note_tad_ticks:
+					out.append("w%%%d" % delayed_note_tad_ticks)
+					duration_in_tad_ticks -= delayed_note_tad_ticks
 
 			# Write the note itself
 			next_note_is_actually_a_note = next_note and next_note.note and (next_note.note == NoteValue.OFF or (next_note.note >= NoteValue.FIRST and next_note.note <= NoteValue.LAST))
@@ -1171,8 +1187,6 @@ class FurnacePattern(object):
 					apply_legato()
 				if arpeggio_enabled:
 					out.append("{{%s %s %s}}%%%d,%%%d" % (current_instrument_ref.tad_note_name_for_note(note.note, arpeggio=True), current_instrument_ref.tad_note_name_for_note(note.note + arpeggio_note1, arpeggio=True), current_instrument_ref.tad_note_name_for_note(note.note + arpeggio_note2, arpeggio=True), duration_in_tad_ticks, math.ceil(max(1, arpeggio_speed * (tad_ticks_per_row / furnace_ticks_per_row))) ))
-					record_note_as_used(note.note + arpeggio_note1)
-					record_note_as_used(note.note + arpeggio_note2)
 				else:
 					if noise_mode:
 						note_name = "N%d," % noise_frequency

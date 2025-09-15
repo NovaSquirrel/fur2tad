@@ -25,6 +25,7 @@ Note effects:
 * E0: **Arpeggio speed**
 * E1, E2: **Note slide up/down**
 * E4: **Vibrato range**
+* ED: **Note delay** - Currently a very simple version that will insert a wait before the note, and subtract from its duration
 * EA: **Legato**
 * F8, F9: **Single tick volume up/down**
 
