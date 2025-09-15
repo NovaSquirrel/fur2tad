@@ -37,7 +37,7 @@ Other supported features:
 * Groove/speed patterns
 
 Some Furnace features that are not supported:
-* Macros (Except for arpeggio macros that have only one step)
+* Macros (Except for arpeggio and volume macros that have only one step)
 * Virtual tempo
 * Wavetable
 * Pitch and volume slides that would take more than 256 TAD timer ticks - Could be implemented by breaking the slide into parts
@@ -59,6 +59,7 @@ The converter checks for commands in each instrument's name, which will affect h
 * `--auto-timer-mode low_error/lowest_error`: Choose a strategy for automatically choosing TAD timer values from Furnace speeds and tempos.
 * `--timer-override bpm,speed=ticks bpm,speed=ticks bpm,speed=ticks`: Allows overriding the automatic Furnace speed conversions by providing your own timer values.
 * `--ignore-arp-macro`: Do not use the arpeggio macros on instruments to determine the semitone offset.
+* `--ignore-volume-macro`: Do not use the volume macros on instruments to determine the volume scale.
 * `--disable-loop-compression`: Do not attempt to compress the MML with loops.
 * `--disable-sub-compression`: Do not attempt to compress the MML with subroutines.
 * `--remove-instrument-names`: Rename all instruments to have a number instead of using the instrument's stored name.

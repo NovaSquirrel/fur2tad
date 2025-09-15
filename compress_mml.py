@@ -226,6 +226,13 @@ def replace_with_subroutines(channel, mml_sequences):
 				if loop_level:
 					break
 		index += 1
+
+	# Remove instances where there are multiple instrument changes in a row
+	sequence = [_ for _ in sequence if _]
+	for i, t in enumerate(sequence):
+		if i != 0 and t.startswith("@") and sequence[i-1].startswith("@"):
+			sequence[i-1] = None
+
 	mml_sequences[channel] = [_ for _ in sequence if _] # Remove placeholders
 
 def optimize_subroutines(mml_sequences):

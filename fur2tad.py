@@ -439,7 +439,10 @@ def FurnaceInstrumentBlock(furnace_file, name, data, s):
 				for _ in range(macro_length):
 					macro_data.append(bytes_to_int(sf.read(word_size), signed=signed))
 
-				if macro_code[0] == 1: # Arpeggio
+				if macro_code[0] == 0: #Volume
+					if args.ignore_volume_macro != True:
+						instrument.volume_scale = macro_data[0]/127
+				elif macro_code[0] == 1: # Arpeggio
 					if args.ignore_arp_macro != True:
 						instrument.semitone_offset = macro_data[-1]
 				else:
@@ -631,6 +634,7 @@ class TrackerInstrument(object):
 	def __init__(self):
 		# Set defaults
 		self.semitone_offset = 0                 # Taken from arpeggio macro if present
+		self.volume_scale = 1                    # Stacks on top of note volume and envelope volume
 		self.delayed_tad_sample_creation = False # Instead of creating TAD samples at instrument parse time, create them after the song is parsed
 		self.note_remap = {}                     # Index is Furnace note (pre-offset), and value is Furnace note
 
@@ -885,7 +889,8 @@ class FurnacePattern(object):
 		current_instrument_num  = None # Index
 		current_instrument_ref  = None # Reference to FurnaceInstrument object
 		current_instrument_name = ""   # Name to use with TAD to refer to this instrument
-		current_volume = None
+		current_volume = 255           # From the volume column
+		current_effective_volume = 255 # Volume column scaled by instrument's volume scale
 
 		# Furnace state
 		legato = False
@@ -903,7 +908,6 @@ class FurnacePattern(object):
 		noise_frequency = 0
 		already_wrote_loop = False
 		most_recent_vibrato = None
-
 		while row_index < len(self.rows):
 			previous_most_recent_note = most_recent_note
 			note = self.rows[row_index]
@@ -939,8 +943,12 @@ class FurnacePattern(object):
 
 			# Write any volume changes
 			if (current_volume == None or note.volume != current_volume) and note.volume != None:
-				current_volume = min(255, max(0, note.volume))
-				out.append("V%d" % current_volume)
+				current_volume = note.volume
+			volume_scale = current_instrument_ref.volume_scale if current_instrument_ref else 1
+			effective_volume = min(255, max(0, round(current_volume * volume_scale)))
+			if (effective_volume != current_effective_volume) or ("loop", None) in note.effects:
+				current_effective_volume = effective_volume
+				out.append("V%d" % current_effective_volume)
 
 			if note.note: # Seems that any note without 03xx on it stops portamento
 				portamento_speed = None
@@ -1179,7 +1187,10 @@ class FurnacePattern(object):
 			row_index = next_index
 		if legato:
 			apply_legato()
-	
+
+		# Remove V255 if the song never changes the volume so it's redundant to have them
+		if all((not _.startswith("V") or _ == "V255") for _ in out):
+			out = [_ for _ in out if _ != "V255"]
 		return out
 	def __eq__(self, other):
 		return self.rows == other.rows
@@ -1440,6 +1451,7 @@ parser.add_argument('filename')
 parser.add_argument('--auto-timer-mode', type=str) # Options: low_error lowest_error
 parser.add_argument('--timer-override', action='extend', nargs="+", type=str) # Format: bpm,speed=tad timer rate, tad ticks
 parser.add_argument('--ignore-arp-macro', action='store_true')
+parser.add_argument('--ignore-volume-macro', action='store_true')
 parser.add_argument('--disable-loop-compression', action='store_true')
 parser.add_argument('--disable-sub-compression', action='store_true')
 parser.add_argument('--remove-instrument-names', action='store_true')
