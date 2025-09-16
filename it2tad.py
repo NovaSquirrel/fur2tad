@@ -38,9 +38,11 @@ class ImpulseTrackerInstrumentSampleMixin(object):
 
 		for filename in sample_filenames:
 			filename_to_use = filename
+			use_brr = False
 			brr_filename = os.path.splitext(filename)[0]+'.brr'
 			if os.path.exists(brr_filename):
 				filename_to_use = brr_filename
+				use_brr = True
 
 			wav_basename = os.path.basename(filename_to_use)
 			if wav_basename.startswith(look_for):
@@ -54,7 +56,7 @@ class ImpulseTrackerInstrumentSampleMixin(object):
 					"name": self.name,
 					"source": wav_basename,
 					"freq": tuning_freq,
-					"loop": "loop_with_filter" if sample.flags_looped else "none",
+					"loop": "loop_with_filter" if (sample.flags_looped and not use_brr) else "none",
 					"envelope": self.envelope,
 				}
 				if sample.flags_looped:
