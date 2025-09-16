@@ -39,6 +39,7 @@ Other supported features:
 
 Some Furnace features that are not supported:
 * Macros (Except for arpeggio and volume macros that have only one step)
+* Mixing volume macros with volume effects
 * Virtual tempo
 * Wavetable
 * Pitch and volume slides that would take more than 256 TAD timer ticks - Could be implemented by breaking the slide into parts
