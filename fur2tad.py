@@ -1519,6 +1519,11 @@ if __name__ == "__main__":
 		os.makedirs(args.project_folder, exist_ok=True)
 
 		terrificaudio_path = os.path.join(args.project_folder, "project.terrificaudio")
+		original_project = {}
+		if os.path.exists(terrificaudio_path):
+			with open(terrificaudio_path) as f:
+				original_project = json.load(f)
+
 		project = {
 			"_about": {
 				"file_type": "Terrific Audio Driver project file",
@@ -1526,11 +1531,11 @@ if __name__ == "__main__":
 			},
 			"instruments": [],
 			"samples": [],
-			"default_sfx_flags": {"one_channel": True, "interruptible": True},
-			"high_priority_sound_effects": [],
-			"sound_effects": [],
-			"low_priority_sound_effects": [],
-			"sound_effect_file": "sound-effects.txt",
+			"default_sfx_flags": original_project.get("default_sfx_flags", {"one_channel": True, "interruptible": True}),
+			"high_priority_sound_effects": original_project.get("high_priority_sound_effects", []),
+			"sound_effects": original_project.get("sound_effects", []),
+			"low_priority_sound_effects": original_project.get("low_priority_sound_effects", []),
+			"sound_effect_file": original_project.get("sound_effect_file", "sound-effects.txt"),
 			"songs": []
 		}
 
@@ -1561,7 +1566,7 @@ if __name__ == "__main__":
 		with open(terrificaudio_path, 'w') as f:
 			json.dump(project, f, indent=2)
 
-		sfx_path = os.path.join(args.project_folder, "sound-effects.txt")
+		sfx_path = os.path.join(args.project_folder, project.get("sound_effect_file"))
 		if not os.path.exists(sfx_path):
 			f = open(sfx_path, "w")
 			f.close()
