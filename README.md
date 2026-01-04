@@ -3,8 +3,6 @@ Furnace to [Terrific Audio Driver](https://github.com/undisbeliever/terrific-aud
 
 This converter will attempt to compress the generated MML with loops and subroutine calls. It will not currently try to reuse note data across channels. The converter will attempt to pick a combination of a TAD tick rate and ticks-per-row setting that should cause rows to happen at a speed that's less than a millisecond off from how it is in Furnace, but this does mean that different speeds may increase or decrease the amount of precision that effects can have (especially for vibrato). In the future there could be a flag that prioritizes a higher amount of TAD ticks over row durations being as close as possible.
 
-The converter currently takes one command line argument: the filename of a Furnace file.
-
 # Effects supported
 These effects may have limitations or even be implemented incorrectly, because Furnace's manual is missing a lot of details on how effects actually work and that required reverse engineering.
 
