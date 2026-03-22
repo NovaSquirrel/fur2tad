@@ -154,7 +154,7 @@ class ImpulseTrackerFile(object):
 		magic = s.read(4)
 		if magic != b'IMPM':
 			raise Exception("Not an Impulse Tracker module")
-		song_name = s.read(26).decode()
+		song_name = make_alphanumeric(s.read(26).decode())
 		rows_per_beat = bytes_to_int(s.read(1))
 		rows_per_measure = bytes_to_int(s.read(1))
 
@@ -209,7 +209,7 @@ class ImpulseTrackerFile(object):
 		###################################################
 
 		song = TrackerSong()
-		song.name = song_name.replace(" ", "_").replace(chr(0), "")
+		song.name = make_alphanumeric(song_name.replace(" ", "_").replace(chr(0), ""))
 		song.speed_pattern = [initial_speed]
 		song.speed1 = initial_speed
 		song.ticks_per_second = initial_tempo / 2.5
@@ -238,7 +238,7 @@ class ImpulseTrackerFile(object):
 			sample.flags_sustain_loop = bool(sample.flags & 32)
 
 			sample.default_volume = bytes_to_int(s.read(1))
-			sample.name           = s.read(26).decode().replace(" ", "_").replace(chr(0), "")
+			sample.name           = make_alphanumeric(s.read(26).decode().replace(" ", "_").replace(chr(0), ""))
 			if args.remove_instrument_names:
 				sample.name = "sample%d" % sample_number
 			sample.convert_flags  = bytes_to_int(s.read(1))
@@ -296,7 +296,7 @@ class ImpulseTrackerFile(object):
 			instrument.tracker_version = bytes_to_int(s.read(2))
 			instrument.sample_count = bytes_to_int(s.read(1))
 			s.read(1) # Reserved
-			instrument.name = s.read(26).decode().replace(" ", "_").replace(chr(0), "")
+			instrument.name = make_alphanumeric(s.read(26).decode().replace(" ", "_").replace(chr(0), ""))
 			if args.remove_instrument_names:
 				instrument.name = "instrument%d" % instrument_number
 			s.read(6) # Skip ahead

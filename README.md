@@ -72,7 +72,7 @@ The converter checks for commands in each instrument's name, which will affect h
 * `--default-instrument-last-octave 0-7`: If using `--keep-all-instruments`, use this as the `last_octave` on instruments that weren't used.
 
 # Impulse Tracker module support
-An `it2tad.py` is provided, which can run Impulse Tracker music through the same conversion logic. `xmodits` is required and is used to extract samples from the file; `pip install xmodits-py` can be used to install it. The converter will use the single song contained in the `.it` file and multiple songs are not supported yet. `it2tad` will not fix your samples for you; the sample file length must be a multiple of 16 samples.
+An `it2tad.py` is provided, which can run Impulse Tracker music through the same conversion logic. `xmodits` is required and is used to extract samples from the file; `pip install xmodits-py` can be used to install it. The converter will use the single song contained in the `.it` file and multiple songs are not supported yet. `it2tad` will not fix your samples for you; the sample file length must be a multiple of 16 samples. There is currently no processing done to the extracted samples at all. The converter will use a `.brr` file instead of a `.wav` with the same name if present, which can be used to override a sample with a version that has been fixed up with Furnace.
 
 Caution: xmodits seems to throw an error when the wav files it's attempting to create already exist, so this tool will remove all wav files in the output directory whose name starts with two digits, a space, and a hyphen.
 
@@ -100,7 +100,7 @@ Impulse Tracker effects are converted into Furnace effects; not all Furnace effe
 
 Some Impulse Tracker features that are not supported:
 * New note actions
-* Instrument loop points that are not at the start of the sample (could be added later)
+* Sample loop points that are not at the start of the sample (could be added later)
 * Instrument envelopes (instruments will use `gain F127`)
 
 ## Metadata in Impulse Tracker instrument names
